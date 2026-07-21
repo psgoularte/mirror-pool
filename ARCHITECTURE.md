@@ -73,6 +73,31 @@ second-encoding forgery vector.
 - `ROOT_HISTORY_SIZE = 64` → recent roots retained so a proof survives deposits
   that advance the tree between proving and landing (SPEC §7).
 
+## Membership circuit (milestone 2)
+
+The Groth16/BN254 circuit (`circuit`) proves, in zero knowledge, "I know a
+secret whose commitment is a leaf under this root, and this is its epoch-scoped
+nullifier" — without revealing which leaf.
+
+- **Private witness:** `secret`, `path_elements[20]`, `path_indices[20]`.
+- **Public instance (canonical order):** `merkle_root`, `nullifier_hash`,
+  `epoch_id`, `action_binding`. This order is load-bearing — the on-chain
+  verifier consumes the inputs in exactly this sequence.
+- **Constraints:** (1) `commitment = Poseidon(secret)` and Merkle inclusion up
+  the path; (2) `nullifier_hash = Poseidon(secret, epoch_id)`, epoch-scoped so a
+  membership acts once per epoch; (3) `action_binding` pinned into the R1CS via
+  a squaring constraint so a proof cannot be replayed for a different action.
+
+The Poseidon hashing inside the circuit is the R1CS gadget in
+`circuit::poseidon_gadget`, which mirrors `common::poseidon` and is tested equal
+to it. `prover.rs` owns setup/prove/verify and the `PublicInputs` byte encoding
+shared with the chain. The trusted setup here is a local dev/test setup; a
+production deployment must source the proving/verifying keys from a multi-party
+ceremony (the toxic waste must be discarded) — called out in the code.
+
+Negative tests (mandatory per SPEC §7) cover wrong secret, tampered path,
+action-binding mismatch, and wrong epoch, each with real proofs.
+
 ## Action abstraction *(milestone 6)*
 
 An `Action` trait so a new integration is "implement the trait + register it,"
@@ -94,8 +119,8 @@ summary in the [README](./README.md) is the current placeholder.
 | # | Milestone | State |
 |---|-----------|-------|
 | 1 | Workspace scaffold + CI + pinned Poseidon params | ✅ done |
-| 2 | Membership circuit (arkworks) + tests | ⏳ next |
-| 3 | On-chain Groth16 verification + CU benchmark | ⏳ |
+| 2 | Membership circuit (arkworks) + tests | ✅ done |
+| 3 | On-chain Groth16 verification + CU benchmark | ⏳ next |
 | 4 | Merkle tree + `deposit` + root history | ⏳ |
 | 5 | Nullifier set + `execute_action` (no-op CPI) | ⏳ |
 | 6 | Epochs + relayer + one real integration | ⏳ |

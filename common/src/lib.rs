@@ -9,6 +9,7 @@
 
 pub mod error;
 pub mod field;
+pub mod merkle;
 pub mod poseidon;
 
 pub use error::{CommonError, Result};
