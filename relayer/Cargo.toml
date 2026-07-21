@@ -1,0 +1,15 @@
+[package]
+name = "mirror-pool-relayer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "mirror-pool fee-paying relayer and epoch batcher (off-chain, Rust)."
+
+[[bin]]
+name = "mirror-pool-relayer"
+path = "src/main.rs"
+
+[dependencies]
+mirror-pool-common.workspace = true

@@ -1,0 +1,103 @@
+# mirror-pool architecture
+
+This document is built up milestone by milestone. It currently covers the
+crypto foundation (milestone 1); the on-chain state machine, the `Action`
+extension guide, the compliance design, and the full threat model are filled in
+as their milestones land.
+
+## Component overview
+
+```
+                    off-chain (Rust)                         on-chain (SBF)
+  ┌──────────┐   ┌──────────┐   ┌──────────┐          ┌───────────────────────┐
+  │  cli     │──▶│ circuit  │   │ relayer  │──tx────▶ │  mirror-pool program   │
+  │ keygen   │   │ (prover) │   │ (pays fee│          │  • Merkle tree + roots │
+  │ deposit  │   │ Groth16  │   │  batches │          │  • nullifier set       │
+  │ prove    │──▶│  BN254   │──▶│  epochs) │          │  • epoch schedule      │
+  │ execute  │   └────┬─────┘   └──────────┘          │  • Groth16 verify      │
+  │ disclose │        │                               │  • PDA-signed CPI      │
+  │ sim      │        ▼                               │  • compliance          │
+  └────┬─────┘   ┌──────────┐                         └───────────┬───────────┘
+       └────────▶│  common  │◀─── pinned Poseidon params ─────────┘
+                 │ (shared) │      (single source of truth)
+                 └──────────┘
+```
+
+Every crate depends on `common` for the field type, byte encodings, tree
+dimensions, and — critically — the Poseidon parameters. Nothing else defines a
+hash constant.
+
+## Cryptographic foundation (milestone 1)
+
+### The Poseidon consistency invariant
+
+The protocol is sound only if three Poseidon implementations agree
+byte-for-byte:
+
+1. the arkworks R1CS **gadget** inside the ZK circuit,
+2. the native **prover-side** hasher, and
+3. the **on-chain** hasher (Solana's `sol_poseidon` syscall).
+
+If any two diverge, a proof valid off-chain fails on-chain — or, worse, the
+Merkle root the program computes never matches the one the circuit proved
+membership under, and deposits become unspendable. The SPEC flags this as the
+project's critical footgun.
+
+**How we neutralize it.** `common` pins exactly one parameter set — the
+circom-compatible BN254 `x5` constants from
+[`light-poseidon`](https://github.com/Lightprotocol/light-poseidon), the same
+implementation Light Protocol's `sol_poseidon` syscall runs on-chain. `common`
+re-implements the circom permutation over those constants in plain Rust and a
+test (`poseidon::tests::poseidon_matches_reference`) asserts, over 1000 random
+inputs per arity, that it reproduces `light-poseidon`'s output exactly. The
+circuit crate (milestone 2) tests its gadget against `common`. The chain of
+equalities — gadget = native = `light-poseidon` = syscall — closes the loop.
+
+A subtle reason we hand-roll rather than reuse arkworks' `PoseidonSponge`: the
+arkworks sponge reads its digest from `state[capacity]`, whereas
+circom / `light-poseidon` / the syscall read `state[0]`. Dropping in arkworks'
+sponge would silently produce a *different* hash. `common::poseidon` follows the
+circom construction (`state = [0, inputs…]`, permute, output `state[0]`).
+
+### Field encoding
+
+All field elements cross crate and chain boundaries as canonical **big-endian**
+32-byte values (`common::field`), matching what `sol_poseidon` and
+`groth16-solana` consume. The decoder rejects non-canonical encodings (values
+`≥` the field modulus) rather than reducing them, closing a
+second-encoding forgery vector.
+
+### Shared dimensions
+
+- `TREE_DEPTH = 20` → up to ~1.05M commitments; a 20-hash in-circuit path.
+- `ROOT_HISTORY_SIZE = 64` → recent roots retained so a proof survives deposits
+  that advance the tree between proving and landing (SPEC §7).
+
+## Action abstraction *(milestone 6)*
+
+An `Action` trait so a new integration is "implement the trait + register it,"
+not a program rewrite. Extension guide lands here with the first real
+integration.
+
+## Compliance design *(milestone 7)*
+
+Viewing-key / selective-disclosure scheme and the pluggable deposit-screening
+hook, documented here when they land.
+
+## Threat model *(milestone 8)*
+
+Full, honest treatment of deanonymization vectors and residual leakage. The
+summary in the [README](./README.md) is the current placeholder.
+
+## Milestone status
+
+| # | Milestone | State |
+|---|-----------|-------|
+| 1 | Workspace scaffold + CI + pinned Poseidon params | ✅ done |
+| 2 | Membership circuit (arkworks) + tests | ⏳ next |
+| 3 | On-chain Groth16 verification + CU benchmark | ⏳ |
+| 4 | Merkle tree + `deposit` + root history | ⏳ |
+| 5 | Nullifier set + `execute_action` (no-op CPI) | ⏳ |
+| 6 | Epochs + relayer + one real integration | ⏳ |
+| 7 | Compliance (viewing keys + screening hook) | ⏳ |
+| 8 | Threat model + docs + demo | ⏳ |

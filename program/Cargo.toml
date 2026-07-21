@@ -1,0 +1,32 @@
+[package]
+name = "mirror-pool-program"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "mirror-pool on-chain program: Merkle tree, nullifiers, epochs, PDA execution, compliance."
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+solana-program.workspace = true
+mirror-pool-common.workspace = true
+groth16-solana.workspace = true
+thiserror.workspace = true
+
+[features]
+# Downstream crates (relayer, CLI, integration tests) link the program as a
+# library for its instruction/state types without pulling in the BPF
+# entrypoint symbol.
+no-entrypoint = []
+# Referenced by `solana_program::entrypoint!`; declaring them keeps the SBF
+# build free of `unexpected_cfgs` warnings under CI's `-D warnings`.
+custom-heap = []
+custom-panic = []
+
+[lints.rust]
+# `target_os = "solana"` is only defined by the SBF target; teach the host
+# build's lint pass that it is a valid value rather than a typo.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

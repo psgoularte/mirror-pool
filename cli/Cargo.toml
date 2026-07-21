@@ -1,0 +1,15 @@
+[package]
+name = "mirror-pool-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "mirror-pool developer CLI: keygen, deposit, prove, execute, disclose, sim."
+
+[[bin]]
+name = "mirror-pool"
+path = "src/main.rs"
+
+[dependencies]
+mirror-pool-common.workspace = true

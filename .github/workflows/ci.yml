@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  # Fast, host-only gates: formatting, lints, and the full test suite
+  # (circuit unit tests, program logic tests, the Poseidon equality test, and
+  # the compute-unit benchmark). These run on the stable toolchain pinned by
+  # rust-toolchain.toml.
+  check:
+    name: fmt + clippy + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --all-features
+
+      - name: test
+        run: cargo test --workspace --all-features
+
+  # The on-chain program must compile to SBF bytecode. This gate catches
+  # BPF-only breakage (host-forbidden syscalls, oversized stack frames) that
+  # the host build above cannot.
+  build-sbf:
+    name: build-sbf (program)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-sbf-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-sbf-
+
+      - name: Install Solana (Agave) toolchain
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: cargo build-sbf
+        run: cargo build-sbf --manifest-path program/Cargo.toml

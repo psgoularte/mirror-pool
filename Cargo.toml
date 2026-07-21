@@ -1,0 +1,51 @@
+# mirror-pool — Cargo workspace root.
+#
+# Shared crypto constants live ONLY in the `common` crate (single source of
+# truth for the pinned Poseidon parameters); every other crate imports them.
+[workspace]
+resolver = "2"
+members = ["common", "circuit", "program", "relayer", "cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/solanabr/mirror-pool"
+authors = ["mirror-pool contributors"]
+
+# Pinned once, here. arkworks 0.5 is the version light-poseidon 0.4 and
+# groth16-solana 0.2 agree on, so the whole graph stays on one arkworks major.
+[workspace.dependencies]
+# --- arkworks (circuit + prover, off-chain) ---
+ark-bn254 = { version = "0.5", default-features = false, features = ["curve"] }
+ark-ff = { version = "0.5", default-features = false }
+ark-ec = { version = "0.5", default-features = false }
+ark-std = { version = "0.5", default-features = false }
+ark-serialize = { version = "0.5", default-features = false, features = ["derive"] }
+ark-relations = { version = "0.5", default-features = false }
+ark-r1cs-std = { version = "0.5", default-features = false }
+ark-groth16 = { version = "0.5", default-features = false }
+ark-snark = { version = "0.5", default-features = false }
+ark-crypto-primitives = { version = "0.5", default-features = false }
+
+# --- Poseidon (circom-compatible BN254 params; matches the sol_poseidon syscall) ---
+light-poseidon = "0.4"
+
+# --- on-chain Groth16 verification (Light Protocol v3) ---
+groth16-solana = "0.2"
+
+# --- Solana ---
+solana-program = "2.3"
+
+# --- shared utils ---
+thiserror = "1.0"
+num-bigint = "0.4"
+rand = { version = "0.8", default-features = false }
+
+# Internal crates.
+mirror-pool-common = { path = "common" }
+mirror-pool-circuit = { path = "circuit" }
+
+[profile.release]
+overflow-checks = true
+lto = "thin"
