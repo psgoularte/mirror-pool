@@ -21,7 +21,7 @@ use crate::error::{CircuitError, Result};
 use ark_bn254::{Bn254, Fq, G1Affine, G2Affine};
 use ark_ff::{BigInteger, PrimeField};
 use ark_groth16::{Proof, VerifyingKey};
-use mirror_pool_common::field::FIELD_BYTES;
+use mirror_pool_common::FIELD_BYTES;
 use std::ops::Neg;
 
 /// Encoded G1 point: `x_be || y_be`.

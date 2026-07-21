@@ -8,12 +8,21 @@ authors.workspace = true
 description = "Shared types and the single source of truth for mirror-pool's pinned Poseidon parameters."
 
 [dependencies]
-ark-bn254.workspace = true
-ark-ff.workspace = true
-ark-serialize.workspace = true
-ark-std.workspace = true
-light-poseidon.workspace = true
 thiserror.workspace = true
+# The cryptographic modules (field/poseidon/merkle) pull arkworks + light-poseidon.
+# They are gated behind the default `crypto` feature so the on-chain program can
+# depend on this crate for the pure protocol constants WITHOUT compiling
+# light-poseidon into the BPF binary (its param builder overflows the BPF stack
+# frame). On-chain hashing uses the `sol_poseidon` syscall instead.
+ark-bn254 = { workspace = true, optional = true }
+ark-ff = { workspace = true, optional = true }
+ark-serialize = { workspace = true, optional = true }
+ark-std = { workspace = true, optional = true }
+light-poseidon = { workspace = true, optional = true }
+
+[features]
+default = ["crypto"]
+crypto = ["dep:ark-bn254", "dep:ark-ff", "dep:ark-serialize", "dep:ark-std", "dep:light-poseidon"]
 
 [dev-dependencies]
 ark-std = { workspace = true, features = ["std"] }

@@ -8,14 +8,9 @@
 //! of endianness bugs.
 
 use crate::error::{CommonError, Result};
+use crate::{Bytes32, FIELD_BYTES};
 use ark_bn254::Fr;
 use ark_ff::{BigInteger, PrimeField};
-
-/// Byte length of a serialized field element / hash digest.
-pub const FIELD_BYTES: usize = 32;
-
-/// A canonical 32-byte big-endian field element (leaf, root, nullifier, …).
-pub type Bytes32 = [u8; FIELD_BYTES];
 
 /// Encode a field element as canonical big-endian bytes.
 ///

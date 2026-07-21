@@ -8,7 +8,7 @@ authors.workspace = true
 description = "arkworks Groth16/BN254 membership circuit and prover for mirror-pool."
 
 [dependencies]
-mirror-pool-common.workspace = true
+mirror-pool-common = { workspace = true, features = ["crypto"] }
 ark-bn254.workspace = true
 ark-ff.workspace = true
 ark-ec.workspace = true

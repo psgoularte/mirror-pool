@@ -14,10 +14,17 @@ crate-type = ["cdylib", "lib"]
 solana-program.workspace = true
 groth16-solana.workspace = true
 thiserror.workspace = true
-# NOTE: mirror-pool-common is intentionally NOT a dependency yet. M3's verifier
-# is byte-only. It returns in M4 (for TREE_DEPTH / field encoding), at which
-# point on-chain Poseidon must use the `sol_poseidon` syscall — never
-# light-poseidon's pure-Rust path, which overflows the BPF stack frame.
+borsh = { version = "1", features = ["derive"] }
+# Zero-copy for the large PoolConfig account: the struct is cast directly out of
+# the account buffer, so it never lands on the (4 KB) BPF stack.
+bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
+# On-chain Poseidon: the `sol_poseidon` syscall on BPF (light-poseidon only on
+# the host), so no heavy param builder reaches the BPF binary.
+solana-poseidon = "2.2"
+# Pure protocol constants only (TREE_DEPTH, ROOT_HISTORY_SIZE) — `crypto`
+# feature off (workspace default), so arkworks/light-poseidon are NOT compiled
+# into the program's BPF binary.
+mirror-pool-common = { workspace = true }
 
 [features]
 # Downstream crates (relayer, CLI, integration tests) link the program as a
@@ -41,5 +48,5 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"
 # this crate's solana-program 2.3 — they interact only via the compiled `.so`
 # and a fixture file.
 mirror-pool-circuit.workspace = true
-mirror-pool-common.workspace = true
+mirror-pool-common = { workspace = true, features = ["crypto"] }
 ark-std = { workspace = true, features = ["std"] }

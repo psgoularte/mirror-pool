@@ -46,8 +46,10 @@ thiserror = "1.0"
 num-bigint = "0.4"
 rand = { version = "0.8", default-features = false }
 
-# Internal crates.
-mirror-pool-common = { path = "common" }
+# Internal crates. `common` defaults to crypto OFF at the workspace level so the
+# on-chain program pulls only the pure constants; crates that need the arkworks/
+# light-poseidon modules opt in with `features = ["crypto"]`.
+mirror-pool-common = { path = "common", default-features = false }
 mirror-pool-circuit = { path = "circuit" }
 
 [profile.release]

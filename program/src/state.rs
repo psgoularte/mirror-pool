@@ -1,0 +1,153 @@
+//! On-chain account state.
+//!
+//! Milestone 4 introduces [`PoolConfig`]: the incremental Merkle tree (filled
+//! subtrees + current root), the root-history ring buffer, and administrative
+//! fields. Later milestones extend it with the epoch schedule, fee params, and
+//! the compliance-authority registry.
+//!
+//! `PoolConfig` is a zero-copy [`bytemuck::Pod`] type: the program casts it
+//! directly out of the account buffer and mutates it in place, so the 3.4 KB
+//! struct never lands on the 4 KB BPF stack (borsh-deserializing it by value
+//! overflows the frame). To keep alignment at 1 — account data is only
+//! byte-aligned — the `u64` counters are stored as little-endian `[u8; 8]`.
+
+use crate::error::MirrorPoolError;
+use crate::merkle::{hash_pair, zero_hashes};
+use bytemuck::{Pod, Zeroable};
+use mirror_pool_common::{ROOT_HISTORY_SIZE, TREE_DEPTH};
+use solana_program::program_error::ProgramError;
+
+/// PDA seed prefix for a pool config account.
+pub const POOL_SEED: &[u8] = b"pool";
+
+/// Pool configuration + incremental Merkle tree state (zero-copy, `align = 1`).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct PoolConfig {
+    /// 1 once initialized, 0 otherwise.
+    pub is_initialized: u8,
+    /// PDA bump for this pool account.
+    pub bump: u8,
+    /// Tree depth (must equal [`TREE_DEPTH`]).
+    pub depth: u8,
+    /// Admin / upgrade authority (raw pubkey bytes).
+    pub authority: [u8; 32],
+    /// Number of leaves inserted so far; also the next leaf index (LE bytes;
+    /// use [`Self::next_index`]).
+    pub next_index: [u8; 8],
+    /// Index of the most recently written slot in `root_history` (LE bytes;
+    /// use [`Self::root_history_index`]).
+    pub root_history_index: [u8; 8],
+    /// Current Merkle root.
+    pub current_root: [u8; 32],
+    /// Ring buffer of recent roots so proofs survive concurrent deposits.
+    pub root_history: [[u8; 32]; ROOT_HISTORY_SIZE],
+    /// Rightmost filled node at each level (incremental-tree state).
+    pub filled_subtrees: [[u8; 32]; TREE_DEPTH],
+    /// Empty-subtree hash at each level (constant after init).
+    pub zeros: [[u8; 32]; TREE_DEPTH],
+}
+
+impl PoolConfig {
+    /// Exact account length (`= size_of::<PoolConfig>()`, no padding at align 1).
+    pub const LEN: usize = 1
+        + 1
+        + 1
+        + 32
+        + 8
+        + 8
+        + 32
+        + (ROOT_HISTORY_SIZE * 32)
+        + (TREE_DEPTH * 32)
+        + (TREE_DEPTH * 32);
+
+    /// Reinterpret an account's bytes as a mutable `PoolConfig` (no copy).
+    pub fn load_mut(data: &mut [u8]) -> Result<&mut Self, ProgramError> {
+        bytemuck::try_from_bytes_mut(data)
+            .map_err(|_| MirrorPoolError::InvalidInstructionData.into())
+    }
+
+    /// Reinterpret an account's bytes as a shared `PoolConfig` (no copy).
+    pub fn load(data: &[u8]) -> Result<&Self, ProgramError> {
+        bytemuck::try_from_bytes(data).map_err(|_| MirrorPoolError::InvalidInstructionData.into())
+    }
+
+    pub fn next_index(&self) -> u64 {
+        u64::from_le_bytes(self.next_index)
+    }
+
+    pub fn root_history_index(&self) -> u64 {
+        u64::from_le_bytes(self.root_history_index)
+    }
+
+    /// Initialize an empty pool in place. Fails if already initialized or the
+    /// depth is unsupported.
+    pub fn initialize(
+        &mut self,
+        authority: [u8; 32],
+        bump: u8,
+        depth: u8,
+    ) -> Result<(), ProgramError> {
+        if self.is_initialized != 0 {
+            return Err(MirrorPoolError::AlreadyInitialized.into());
+        }
+        if depth as usize != TREE_DEPTH {
+            return Err(MirrorPoolError::InvalidTreeDepth.into());
+        }
+        // zeros_full has TREE_DEPTH + 1 entries; the last is the empty-tree root.
+        let zeros_full = zero_hashes(TREE_DEPTH)?;
+
+        self.is_initialized = 1;
+        self.authority = authority;
+        self.bump = bump;
+        self.depth = depth;
+        self.next_index = 0u64.to_le_bytes();
+        self.root_history_index = 0u64.to_le_bytes();
+        self.current_root = zeros_full[TREE_DEPTH];
+        self.root_history = [[0u8; 32]; ROOT_HISTORY_SIZE];
+        self.root_history[0] = zeros_full[TREE_DEPTH];
+        self.zeros.copy_from_slice(&zeros_full[..TREE_DEPTH]);
+        self.filled_subtrees
+            .copy_from_slice(&zeros_full[..TREE_DEPTH]);
+        Ok(())
+    }
+
+    /// Whether `root` is the current root or one of the retained recent roots.
+    pub fn is_known_root(&self, root: &[u8; 32]) -> bool {
+        if root.iter().all(|b| *b == 0) {
+            return false; // all-zero is never a real tree root
+        }
+        self.current_root == *root || self.root_history.iter().any(|r| r == root)
+    }
+
+    /// Insert a leaf, advancing the tree and pushing the new root to history.
+    /// Returns the leaf's index. Fails loudly if the tree is full.
+    pub fn insert(&mut self, leaf: [u8; 32]) -> Result<u64, ProgramError> {
+        let capacity: u64 = 1u64 << self.depth;
+        let leaf_index = self.next_index();
+        if leaf_index >= capacity {
+            return Err(MirrorPoolError::TreeFull.into());
+        }
+
+        let mut idx = leaf_index;
+        let mut cur = leaf;
+        for level in 0..(self.depth as usize) {
+            if idx & 1 == 0 {
+                // Left child: right sibling is empty; record the filled subtree.
+                self.filled_subtrees[level] = cur;
+                cur = hash_pair(&cur, &self.zeros[level])?;
+            } else {
+                // Right child: hash against the stored left sibling.
+                cur = hash_pair(&self.filled_subtrees[level], &cur)?;
+            }
+            idx >>= 1;
+        }
+
+        self.current_root = cur;
+        let new_hist = (self.root_history_index() + 1) % (ROOT_HISTORY_SIZE as u64);
+        self.root_history_index = new_hist.to_le_bytes();
+        self.root_history[new_hist as usize] = cur;
+        self.next_index = (leaf_index + 1).to_le_bytes();
+        Ok(leaf_index)
+    }
+}

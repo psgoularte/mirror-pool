@@ -128,6 +128,32 @@ actual SBF bytecode in litesvm over a real proof:
 litesvm without forcing the program off solana-program 2.3; it communicates only
 through the compiled `.so` and a fixture file.
 
+## On-chain state & tree (milestone 4)
+
+`PoolConfig` (`program::state`) is the pool's account: the incremental Merkle
+tree (current root + per-level `filled_subtrees`), the `ROOT_HISTORY_SIZE`
+root-history ring buffer, and admin fields. Two design choices worth noting:
+
+- **Zero-copy.** `PoolConfig` is a `bytemuck::Pod` cast directly out of the
+  account buffer and mutated in place. It is ~3.4 KB — deserializing it by value
+  (borsh) would overflow the 4 KB BPF stack frame. `u64` counters are stored as
+  little-endian `[u8; 8]` to keep the struct `align = 1`, since account data is
+  only byte-aligned.
+- **Incremental insert.** `deposit` advances the tree in `TREE_DEPTH` Poseidon
+  hashes using the filled-subtrees method, pushes the new root into the history
+  ring, and never stores the whole tree. Hashing is the `sol_poseidon` syscall
+  (`solana-poseidon`), so a root computed on-chain is byte-identical to the
+  off-chain reference (`common::merkle`) and the root the circuit proves under.
+
+Instructions added: `InitializePool` (creates the PDA `["pool", authority]`,
+empty tree) and `Deposit` (insert a commitment). Measured cost: init ≈24k CU,
+deposit ≈18.5k CU.
+
+Correctness is gated by host tests (incremental root == reference root at every
+step; on-chain Poseidon == `common::poseidon`; history eviction; tree-full) and
+a litesvm end-to-end (`bench` `e2e` binary) that runs the real bytecode and
+confirms the on-chain root matches the reference after several deposits.
+
 ## Action abstraction *(milestone 6)*
 
 An `Action` trait so a new integration is "implement the trait + register it,"
@@ -151,8 +177,8 @@ summary in the [README](./README.md) is the current placeholder.
 | 1 | Workspace scaffold + CI + pinned Poseidon params | ✅ done |
 | 2 | Membership circuit (arkworks) + tests | ✅ done |
 | 3 | On-chain Groth16 verification + CU benchmark (~98k CU) | ✅ done |
-| 4 | Merkle tree + `deposit` + root history | ⏳ next |
-| 5 | Nullifier set + `execute_action` (no-op CPI) | ⏳ |
+| 4 | Merkle tree + `deposit` + root history | ✅ done |
+| 5 | Nullifier set + `execute_action` (no-op CPI) | ⏳ next |
 | 6 | Epochs + relayer + one real integration | ⏳ |
 | 7 | Compliance (viewing keys + screening hook) | ⏳ |
 | 8 | Threat model + docs + demo | ⏳ |

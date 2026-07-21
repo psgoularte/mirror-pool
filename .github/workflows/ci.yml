@@ -73,4 +73,7 @@ jobs:
         run: cargo test -p mirror-pool-program --test gen_fixture -- --ignored --nocapture
 
       - name: compute-unit benchmark (verification < 200k CU)
-        run: cargo run --release --manifest-path bench/Cargo.toml
+        run: cargo run --release --manifest-path bench/Cargo.toml --bin cu-bench
+
+      - name: end-to-end init + deposit (on-chain root == reference)
+        run: cargo run --release --manifest-path bench/Cargo.toml --bin e2e

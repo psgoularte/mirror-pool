@@ -7,9 +7,10 @@ use ark_bn254::{Bn254, Fr};
 use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey, VerifyingKey};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_snark::SNARK;
-use mirror_pool_common::field::{fr_from_bytes_be, fr_to_bytes_be, Bytes32};
+use mirror_pool_common::field::{fr_from_bytes_be, fr_to_bytes_be};
 use mirror_pool_common::merkle::{root_from_proof, MerkleProof};
 use mirror_pool_common::poseidon;
+use mirror_pool_common::Bytes32;
 use rand::{CryptoRng, RngCore};
 
 /// The circuit's public inputs, in the canonical wire order the circuit

@@ -1,7 +1,8 @@
 //! Typed, on-chain program errors.
 //!
 //! Each variant maps to a stable `u32` so clients can match on failures
-//! precisely (SPEC §7). Variants are added as milestones land their handlers.
+//! precisely (SPEC §7). Variants are appended (never reordered) as milestones
+//! land their handlers, so the discriminants stay stable.
 
 use solana_program::program_error::ProgramError;
 use thiserror::Error;
@@ -22,6 +23,30 @@ pub enum MirrorPoolError {
 
     #[error("an expected account was not provided")]
     MissingAccount = 4,
+
+    #[error("the poseidon syscall failed")]
+    PoseidonFailed = 5,
+
+    #[error("the pool is already initialized")]
+    AlreadyInitialized = 6,
+
+    #[error("the pool account is not initialized")]
+    NotInitialized = 7,
+
+    #[error("unsupported tree depth")]
+    InvalidTreeDepth = 8,
+
+    #[error("the merkle tree is full")]
+    TreeFull = 9,
+
+    #[error("a required signature is missing")]
+    MissingSignature = 10,
+
+    #[error("the provided account address does not match the expected PDA")]
+    InvalidPoolAddress = 11,
+
+    #[error("the account is not owned by this program")]
+    InvalidAccountOwner = 12,
 }
 
 impl From<MirrorPoolError> for ProgramError {

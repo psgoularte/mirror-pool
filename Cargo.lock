@@ -1063,6 +1063,18 @@ dependencies = [
 
 [[package]]
 name = "light-poseidon"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c9a85a9752c549ceb7578064b4ed891179d20acd85f27318573b64d2d7ee7ee"
+dependencies = [
+ "ark-bn254 0.4.0",
+ "ark-ff 0.4.2",
+ "num-bigint",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "light-poseidon"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47a1ccadd0bb5a32c196da536fd72c59183de24a055f6bf0513bf845fefab862"
@@ -1130,7 +1142,7 @@ dependencies = [
  "ark-snark",
  "ark-std 0.5.0",
  "groth16-solana",
- "light-poseidon",
+ "light-poseidon 0.4.0",
  "mirror-pool-common",
  "rand 0.8.7",
  "thiserror 1.0.69",
@@ -1151,7 +1163,7 @@ dependencies = [
  "ark-ff 0.5.0",
  "ark-serialize 0.5.0",
  "ark-std 0.5.0",
- "light-poseidon",
+ "light-poseidon 0.4.0",
  "thiserror 1.0.69",
 ]
 
@@ -1160,9 +1172,12 @@ name = "mirror-pool-program"
 version = "0.1.0"
 dependencies = [
  "ark-std 0.5.0",
+ "borsh 1.8.0",
+ "bytemuck",
  "groth16-solana",
  "mirror-pool-circuit",
  "mirror-pool-common",
+ "solana-poseidon",
  "solana-program",
  "thiserror 1.0.69",
 ]
@@ -1921,6 +1936,18 @@ dependencies = [
  "solana-hash",
  "solana-pubkey",
  "solana-sha256-hasher",
+]
+
+[[package]]
+name = "solana-poseidon"
+version = "2.3.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cbac4eb90016eeb1d37fa36e592d3a64421510c49666f81020736611c319faff"
+dependencies = [
+ "ark-bn254 0.4.0",
+ "light-poseidon 0.2.0",
+ "solana-define-syscall",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

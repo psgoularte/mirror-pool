@@ -14,8 +14,15 @@ description = "Compute-unit benchmark for mirror-pool on-chain membership verifi
 name = "cu-bench"
 path = "src/main.rs"
 
+[[bin]]
+name = "e2e"
+path = "src/e2e.rs"
+
 [dependencies]
 litesvm = "0.14"
+# Reference tree/hashing to check the deployed program's root. Pulls arkworks
+# (no Solana deps), so it does not disturb litesvm's Solana graph.
+mirror-pool-common = { path = "../common" }
 solana-address = ">=2.2, <3"
 solana-account = "4"
 solana-instruction = "3"

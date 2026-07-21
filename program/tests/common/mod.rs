@@ -58,7 +58,12 @@ pub fn membership_fixture() -> Fixture {
         [pi_bytes[0], pi_bytes[1], pi_bytes[2], pi_bytes[3]];
     let proof_flat = sol_proof.to_bytes();
 
-    let instruction_data = Instruction::pack_verify_membership(&proof_flat, &public_inputs);
+    let instruction_data = Instruction::VerifyMembership {
+        proof: proof_flat,
+        public_inputs,
+    }
+    .pack()
+    .expect("pack verify instruction");
 
     Fixture {
         vk_bytes: sol_vk.to_bytes(),
