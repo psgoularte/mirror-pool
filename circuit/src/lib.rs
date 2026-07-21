@@ -13,6 +13,7 @@ pub mod circuit;
 pub mod error;
 pub mod poseidon_gadget;
 pub mod prover;
+pub mod solana;
 
 // Re-exported so downstream crates get the field type from one place.
 pub use ark_bn254::Fr;

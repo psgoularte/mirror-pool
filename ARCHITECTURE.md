@@ -98,6 +98,36 @@ ceremony (the toxic waste must be discarded) — called out in the code.
 Negative tests (mandatory per SPEC §7) cover wrong secret, tampered path,
 action-binding mismatch, and wrong epoch, each with real proofs.
 
+## On-chain verification (milestone 3)
+
+The program verifies membership proofs with
+[`groth16-solana`](https://github.com/Lightprotocol/groth16-solana) (audited
+under Light Protocol v3), which runs BN254 Groth16 verification through the
+`alt_bn128` syscalls. Three byte-layout quirks are handled explicitly in
+`circuit::solana` (which converts arkworks keys/proofs to the on-chain layout):
+
+1. **Endianness** — each 32-byte coordinate is big-endian (arkworks is
+   little-endian internally); we emit big-endian by construction.
+2. **G2 coordinate order** — the precompile encodes `Fq2` imaginary-part-first
+   (`c1 || c0`), the reverse of arkworks' in-memory order.
+3. **`proof_a` negation** — `A` is negated before encoding, per the verifier's
+   rearranged pairing equation.
+
+The program side (`program::verifier`) is deliberately **byte-only** — it never
+links arkworks, which is what keeps it inside the compute budget on BPF.
+
+**Correctness** is gated two ways: a host test (`program`'s `verify_host`)
+converts a real arkworks proof and verifies it through the exact
+`groth16-solana` code the program runs, and rejects tampered proofs / public
+inputs / verifying keys. **Cost** is gated by the `bench/` crate, which runs the
+actual SBF bytecode in litesvm over a real proof:
+
+> **VerifyMembership: ~98k compute units** — comfortably under the ~200k budget.
+
+`bench/` is workspace-excluded so it can track the latest Solana release for
+litesvm without forcing the program off solana-program 2.3; it communicates only
+through the compiled `.so` and a fixture file.
+
 ## Action abstraction *(milestone 6)*
 
 An `Action` trait so a new integration is "implement the trait + register it,"
@@ -120,8 +150,8 @@ summary in the [README](./README.md) is the current placeholder.
 |---|-----------|-------|
 | 1 | Workspace scaffold + CI + pinned Poseidon params | ✅ done |
 | 2 | Membership circuit (arkworks) + tests | ✅ done |
-| 3 | On-chain Groth16 verification + CU benchmark | ⏳ next |
-| 4 | Merkle tree + `deposit` + root history | ⏳ |
+| 3 | On-chain Groth16 verification + CU benchmark (~98k CU) | ✅ done |
+| 4 | Merkle tree + `deposit` + root history | ⏳ next |
 | 5 | Nullifier set + `execute_action` (no-op CPI) | ⏳ |
 | 6 | Epochs + relayer + one real integration | ⏳ |
 | 7 | Compliance (viewing keys + screening hook) | ⏳ |

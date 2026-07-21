@@ -65,3 +65,12 @@ jobs:
 
       - name: cargo build-sbf
         run: cargo build-sbf --manifest-path program/Cargo.toml
+
+      # Prove a real arkworks proof verifies on-chain, under the CU budget.
+      # The bench crate is workspace-excluded (own Solana version), so it runs
+      # via its own manifest.
+      - name: generate CU benchmark fixture
+        run: cargo test -p mirror-pool-program --test gen_fixture -- --ignored --nocapture
+
+      - name: compute-unit benchmark (verification < 200k CU)
+        run: cargo run --release --manifest-path bench/Cargo.toml

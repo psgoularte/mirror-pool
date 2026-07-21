@@ -25,3 +25,4 @@ thiserror.workspace = true
 
 [dev-dependencies]
 ark-std = { workspace = true, features = ["std"] }
+groth16-solana.workspace = true

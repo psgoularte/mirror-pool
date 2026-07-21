@@ -12,9 +12,12 @@ crate-type = ["cdylib", "lib"]
 
 [dependencies]
 solana-program.workspace = true
-mirror-pool-common.workspace = true
 groth16-solana.workspace = true
 thiserror.workspace = true
+# NOTE: mirror-pool-common is intentionally NOT a dependency yet. M3's verifier
+# is byte-only. It returns in M4 (for TREE_DEPTH / field encoding), at which
+# point on-chain Poseidon must use the `sol_poseidon` syscall — never
+# light-poseidon's pure-Rust path, which overflows the BPF stack frame.
 
 [features]
 # Downstream crates (relayer, CLI, integration tests) link the program as a
@@ -30,3 +33,13 @@ custom-panic = []
 # `target_os = "solana"` is only defined by the SBF target; teach the host
 # build's lint pass that it is a valid value rather than a typo.
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
+
+[dev-dependencies]
+# Real VK/proof fixtures come from the circuit crate. The litesvm-based
+# compute-unit benchmark lives in the workspace-excluded `bench/` crate, which
+# keeps its own (newer) Solana dependency graph so it never has to unify with
+# this crate's solana-program 2.3 — they interact only via the compiled `.so`
+# and a fixture file.
+mirror-pool-circuit.workspace = true
+mirror-pool-common.workspace = true
+ark-std = { workspace = true, features = ["std"] }
