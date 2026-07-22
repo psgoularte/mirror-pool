@@ -59,6 +59,25 @@ Circom** — and on-chain proof verification uses
 `alt_bn128` syscalls. There is no GUI; consumers are developers, agents, and
 other programs.
 
+## Design differentiators & eligibility
+
+Stated as facts about this design, not comparisons:
+
+- **Rust end to end** — arkworks circuit + Rust prover, **no Circom / snarkjs /
+  JS** anywhere. (Explicit eligibility property for the Rust-only bounty.)
+- **Native `solana-program`** — no Anchor or other framework; the program is
+  hand-written for tight compute (~98k CU verification).
+- **Compliance dimension** — beyond privacy, a Privacy-Pools-style **association
+  set** with a real ZK inclusion proof plus viewing-key selective disclosure: a
+  *separating equilibrium* where honest users prove clean provenance and the
+  anonymity metric is reported over the attested set.
+- **Grounded anonymity metric** — min-entropy effective-k over the association
+  set (not a naive count), derived from the primary literature and honest about
+  the Sybil gap (see [`ARCHITECTURE.md`](./ARCHITECTURE.md#references)).
+- **Runs on a real validator** — deploys with `--arch v3` and the full flow runs
+  against the deployed program over RPC (validated on a local Agave validator;
+  live devnet pending faucet funding — see below).
+
 ## Threat model (summary)
 
 Privacy here is *behavioral* and *probabilistic*: your anonymity is exactly the

@@ -77,6 +77,15 @@ and the epoch window is busy, provided a trusted relayer pays the fee.*
   larger, but the program only guarantees the floor.
 - **Relayer trust.** The relayer learns the member↔action link by construction
   (it holds the job). Use a relayer you trust or a decentralized relayer set.
+- **Association-set compliance — partial.** The `associate` inclusion proof is a
+  real ZK proof (reuses the membership circuit) and attests association-set
+  membership only. **Exclusion (ZK non-membership) is not implemented on-chain**
+  — only an off-chain native reference witness (`circuit::association::
+  SanctionedSet`) is provided for the ASP flow; the ZK sorted-tree circuit is
+  future work. On-chain enforcement of inclusion inside `execute_action` (a
+  second bound Groth16 verify) is designed but off by default. Association sets
+  **narrow** the Sybil gap (they make effective-k measurable over attested
+  members) but do not eliminate it — a corrupt ASP re-introduces it.
 - **Global program upgrade authority** is out of scope here; a production
   deployment should use a governance-controlled or frozen upgrade authority.
 

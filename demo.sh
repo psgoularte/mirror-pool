@@ -46,11 +46,18 @@ cargo run --release --manifest-path bench/Cargo.toml --bin cu-bench
 cargo build-sbf --manifest-path program/Cargo.toml --arch v3  # restore the deployed artifact
 
 echo
-echo "==> 6/6  CLI: keys, and the anonymity-set simulation"
+echo "==> 6/6  CLI: keys, effective-k simulation, and a compliance inclusion proof"
 cargo build -q -p mirror-pool-cli
 BIN=target/debug/mirror-pool
-echo "--- keygen (member) ---";  "$BIN" keygen
-echo "--- sim ---";              "$BIN" sim --members 64 --actors 12 --epochs 3
+echo "--- keygen (member) ---"; "$BIN" keygen
+echo "--- sim: effective-k over the association set vs all deposits (Sybil gap) ---"
+"$BIN" sim --members 16 --sybils 48 --actors 8 --epochs 2
+echo "--- associate: ZK inclusion proof (member in the association set) ---"
+WORK="$(mktemp -d)"
+M="$("$BIN" keygen 2>/dev/null)"; S="$(echo "$M" | awk '/secret:/{print $2}')"; C="$(echo "$M" | awk '/commitment:/{print $2}')"
+OTHER="$("$BIN" keygen 2>/dev/null | awk '/commitment:/{print $2}')"
+printf '%s\n%s\n' "$C" "$OTHER" > "$WORK/assoc-set.txt"
+"$BIN" associate --set "$WORK/assoc-set.txt" --secret "$S" --epoch 1
 
 echo
 echo "==> demo complete. See ARCHITECTURE.md for the threat model and SECURITY.md"

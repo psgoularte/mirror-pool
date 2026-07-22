@@ -8,8 +8,9 @@
 //! * `crank`     — open/close the epoch window (authority only, on-chain).
 //! * `prove`     — build a membership proof and write a relay job.
 //! * `execute`   — hand a relay job to a relayer (submit `execute_action`).
+//! * `associate` — ZK proof that a deposit is in an association set (compliance).
 //! * `disclose`  — seal a member's secret to an auditor (selective disclosure).
-//! * `sim`       — simulate N members over epochs; report the anonymity-set size.
+//! * `sim`       — report min-entropy effective-k over the association set.
 //!
 //! The offline commands (`setup`, `keygen`, `prove`, `disclose`, `sim`) need no
 //! network. `init-pool`, `deposit`, `crank`, and `execute` take an RPC endpoint.
@@ -77,6 +78,19 @@ enum Command {
         params: String,
         #[arg(long, default_value = "action.job")]
         out: PathBuf,
+    },
+    /// Prove (in ZK) that a member's deposit is in an association set — the
+    /// Privacy-Pools inclusion proof. Reuses the membership circuit against the
+    /// set's root; self-verifies. Guarantees association-set membership only.
+    Associate {
+        /// File of approved commitment hexes (one per line) — the association set.
+        #[arg(long)]
+        set: PathBuf,
+        /// The member's secret (must correspond to a commitment in the set).
+        #[arg(long)]
+        secret: String,
+        #[arg(long, default_value_t = 0)]
+        epoch: u64,
     },
     /// Seal a secret to an auditor's viewing key (selective disclosure).
     Disclose {
@@ -179,6 +193,7 @@ fn main() -> Result<()> {
             &params,
             &out,
         ),
+        Command::Associate { set, secret, epoch } => cmd_associate(&set, &secret, epoch),
         Command::Disclose {
             secret,
             auditor_pubkey,
@@ -337,6 +352,41 @@ fn cmd_prove(
         out.display(),
         hex::encode(job.nullifier_hash())
     );
+    Ok(())
+}
+
+fn cmd_associate(set_path: &Path, secret_hex: &str, epoch: u64) -> Result<()> {
+    use mirror_pool_circuit::association::{prove_inclusion, verify_inclusion, AssociationSet};
+    let secret = parse_fr(secret_hex)?;
+    // Build the association set from approved commitment hexes.
+    let mut set = AssociationSet::new();
+    for line in std::fs::read_to_string(set_path)
+        .context("read set")?
+        .lines()
+    {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        set.approve_commitment(parse_fr(line)?)
+            .map_err(|e| anyhow!("add to set: {e}"))?;
+    }
+    let root = set.root();
+    // Dev keys (deterministic).
+    let (pk, vk) = dev_setup().map_err(|e| anyhow!("setup: {e}"))?;
+    let mut rng = OsRng;
+    let incl = prove_inclusion(&pk, &set, secret, Fr::from(epoch), &mut rng)
+        .map_err(|e| anyhow!("inclusion proof: {e} (is the commitment in the set?)"))?;
+    let ok = verify_inclusion(&vk, &root, &incl).map_err(|e| anyhow!("verify: {e}"))?;
+    println!("association set root: {}", hex::encode(root));
+    println!("inclusion proof verifies: {ok}");
+    println!(
+        "(the ASP verifies this against its published root; it attests \
+         association-set membership only — nothing about identity or balance)"
+    );
+    if !ok {
+        return Err(anyhow!("inclusion proof did not verify"));
+    }
     Ok(())
 }
 

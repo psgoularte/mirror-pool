@@ -355,6 +355,43 @@ an unscreened deposit is rejected, a screened one accepted, a disclosure is
 registered on-chain, the auditor recovers the secret and attributes the
 nullifier, and a stranger cannot.
 
+### Association sets (Privacy-Pools-style compliance)
+
+The `circuit::association` module elevates screening into a ZK-native compliance
+layer [Buterin, Illum, Nadler, Schär & Soleimani, 2023]. An **association set**
+is a curated Merkle tree of deposit commitments with clean provenance, published
+by an **Association Set Provider (ASP)**. Two proofs let an honest member show
+compliance *without revealing which member they are* — the **separating
+equilibrium**: honest users can prove clean provenance, illicit ones cannot.
+
+- **Inclusion (real ZK).** "My deposit is in this good set." Implemented by
+  reusing the membership circuit against the association-set root — no new
+  circuit. A valid proof against `set_root` proves knowledge of a secret whose
+  commitment is a leaf of that set. It binds to an action via the shared
+  `nullifier_hash = Poseidon(secret, epoch)`: the inclusion proof and the
+  pool-membership proof carry the same nullifier, so a match proves the *same*
+  commitment is in both trees. `cli associate` produces and self-verifies one; a
+  non-member cannot produce it.
+- **Exclusion (off-chain reference; on-chain ZK is future work).** "My deposit
+  is not in this sanctioned set." True ZK non-membership needs a dedicated
+  sorted-tree adjacency circuit — **not yet implemented**. The module provides
+  the honest **off-chain reference** (`SanctionedSet::exclusion_witness`: a
+  sorted-set adjacency witness, verified natively) that an ASP uses to attest
+  exclusion. This is explicitly **not** a zero-knowledge on-chain proof; the ZK
+  circuit is documented as the next step in `SECURITY.md`.
+
+**This is the precondition for the anonymity metric.** effective-k is reported
+over the **associated** set; the gap to effective-k over all deposits is the
+Sybil exposure. Association sets are what convert `k_min` from a Sybil-inflatable
+count into a floor over *attested* members — the honest answer to the documented
+Sybil limitation, narrowing it while still disclosing the residual.
+
+**Exact guarantee.** Inclusion attests association-set membership; the exclusion
+reference attests non-membership of a sanctioned set. Nothing about identity,
+balance, or behavior. On-chain execute-action enforcement of an inclusion proof
+(a second bound Groth16 verify, ~2× the CU) is designed but left off by default;
+the off-chain ASP flow above is what ships.
+
 ## Threat model (milestone 8)
 
 mirror-pool provides **probabilistic, behavioral** anonymity. Your anonymity set
