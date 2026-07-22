@@ -83,6 +83,12 @@ pub enum MirrorPoolError {
 
     #[error("deposit screening is enabled: a valid screening-authority signature is required")]
     ScreeningRequired = 24,
+
+    #[error("the guaranteed anonymity set is below the pool's k_min")]
+    AnonymitySetTooSmall = 25,
+
+    #[error("the transfer amount is not an allowed denomination")]
+    InvalidDenomination = 26,
 }
 
 impl From<MirrorPoolError> for ProgramError {

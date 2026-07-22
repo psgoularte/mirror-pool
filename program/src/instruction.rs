@@ -1,40 +1,33 @@
 //! Instruction encoding for the mirror-pool program (borsh).
 //!
-//! Milestone 3 added `VerifyMembership`; milestone 4 adds `InitializePool` and
-//! `Deposit`. Variant order is stable (append-only) so the borsh discriminant
-//! for each instruction never changes — the CU-benchmark fixture depends on
-//! `VerifyMembership` staying variant 0.
+//! Discriminants are assigned by declaration order. The production instructions
+//! occupy the stable range 0..=7. `VerifyMembership` is a **benchmark-only**
+//! instruction gated behind the `bench` feature; it is declared LAST so that
+//! enabling/disabling the feature never shifts a production discriminant, and it
+//! is entirely absent from the default (deployed) build (SECURITY: it read an
+//! unchecked verifying-key account and is pure benchmark surface).
 
 use crate::error::MirrorPoolError;
 use crate::verifier::{NUM_PUBLIC_INPUTS, PROOF_LEN, VK_SERIALIZED_LEN};
 use borsh::{BorshDeserialize, BorshSerialize};
 use solana_program::program_error::ProgramError;
 
-// `VerifyMembership` carries a 384-byte fixed payload; the other variants are
-// small. Boxing it would only move a fixed-size blob to the heap and complicate
-// the on-chain (no-alloc-friendly) decode, so the size skew is intentional.
 #[allow(clippy::large_enum_variant)]
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
 pub enum Instruction {
-    /// Verify a membership proof against the verifying key in the first
-    /// account. Carries the proof (`a||b||c`, `a` negated) and the public
-    /// inputs (big-endian). Variant 0 — do not move.
-    VerifyMembership {
-        proof: [u8; PROOF_LEN],
-        public_inputs: [[u8; 32]; NUM_PUBLIC_INPUTS],
-    },
-
-    /// Create and initialize a pool config PDA with an empty tree of `depth`
-    /// and the membership circuit's verifying key.
+    /// (0) Create and initialize a pool config PDA with an empty tree of
+    /// `depth`, a minimum anonymity set `k_min`, and the membership circuit's
+    /// verifying key.
     InitializePool {
         depth: u8,
+        k_min: u64,
         verifying_key: [u8; VK_SERIALIZED_LEN],
     },
 
-    /// Insert a commitment leaf into the pool's Merkle tree.
+    /// (1) Insert a commitment leaf into the pool's Merkle tree.
     Deposit { commitment: [u8; 32] },
 
-    /// Verify a membership proof and, if valid and unused this epoch, execute
+    /// (2) Verify a membership proof and, if valid and unused this epoch, execute
     /// the selected action via a PDA-signed CPI. Marks the nullifier.
     ExecuteAction {
         proof: [u8; PROOF_LEN],
@@ -43,27 +36,36 @@ pub enum Instruction {
         action_params: Vec<u8>,
     },
 
-    /// Internal: the no-op action's CPI target. Only valid when invoked by the
-    /// pool PDA (as a signer). Not meant to be called directly.
+    /// (3) Internal: the no-op action's CPI target. Only valid when invoked by
+    /// the pool PDA (as a signer). Not meant to be called directly.
     NoOpAction,
 
-    /// Crank: open a new epoch window (authority only). Actions are valid only
-    /// while an epoch is open.
+    /// (4) Crank: open a new epoch window (authority only). Actions are valid
+    /// only while an epoch is open.
     OpenEpoch,
 
-    /// Crank: close the current epoch window (authority only).
+    /// (5) Crank: close the current epoch window (authority only).
     CloseEpoch,
 
-    /// Set (or clear, with all-zero) the deposit-screening authority
+    /// (6) Set (or clear, with all-zero) the deposit-screening authority
     /// (authority only). When set, deposits must be co-signed by it.
     SetScreeningAuthority { authority: [u8; 32] },
 
-    /// Register a selective-disclosure record: the member's commitment, the
+    /// (7) Register a selective-disclosure record: the member's commitment, the
     /// designated auditor, and the member's secret sealed to that auditor.
     RegisterViewingKey {
         commitment: [u8; 32],
         auditor: [u8; 32],
         sealed_secret: Vec<u8>,
+    },
+
+    /// (8, `bench` feature only) Verify a membership proof against a verifying
+    /// key supplied in the first account, and log the result. Benchmark-only;
+    /// NOT compiled into the deployed program.
+    #[cfg(feature = "bench")]
+    VerifyMembership {
+        proof: [u8; PROOF_LEN],
+        public_inputs: [[u8; 32]; NUM_PUBLIC_INPUTS],
     },
 }
 

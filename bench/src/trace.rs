@@ -77,8 +77,9 @@ fn main() {
     let (pool, _b) =
         Address::find_program_address(&[POOL_SEED, authority.pubkey().as_ref()], &program_id);
 
-    // init
-    let mut init = vec![1u8, TREE_DEPTH as u8];
+    // init (k_min = 2)
+    let mut init = vec![0u8, TREE_DEPTH as u8];
+    init.extend_from_slice(&2u64.to_le_bytes());
     init.extend_from_slice(&vk_bytes);
     send(
         &mut svm,
@@ -103,7 +104,7 @@ fn main() {
         let c = commitment(secret);
         tree.insert(c).unwrap();
         secrets.push(secret);
-        let mut d = vec![2u8];
+        let mut d = vec![1u8];
         d.extend_from_slice(&fr_to_bytes_be(&c));
         send(
             &mut svm,
@@ -128,7 +129,7 @@ fn main() {
                 AccountMeta::new(pool, false),
                 AccountMeta::new_readonly(authority.pubkey(), true),
             ],
-            data: vec![5u8],
+            data: vec![4u8],
         },
     );
 
@@ -151,10 +152,12 @@ fn main() {
         let mut proof = [0u8; 256];
         proof.copy_from_slice(&sol);
         let nullifier: [u8; 32] = pi[1];
-        let (nullifier_pda, _n) =
-            Address::find_program_address(&[NULLIFIER_SEED, &nullifier], &program_id);
+        let (nullifier_pda, _n) = Address::find_program_address(
+            &[NULLIFIER_SEED, pool.as_ref(), &nullifier],
+            &program_id,
+        );
 
-        let mut data = vec![3u8];
+        let mut data = vec![2u8];
         data.extend_from_slice(&proof);
         for l in &pi {
             data.extend_from_slice(l);

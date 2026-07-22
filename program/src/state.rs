@@ -88,6 +88,13 @@ pub struct PoolConfig {
     /// pluggable hook: point it at an allowlist/attestation program's authority
     /// to gate entry. Documented as opt-in.
     pub screening_authority: [u8; 32],
+    /// Minimum guaranteed anonymity set (`k_min`, LE bytes; use [`Self::k_min`]).
+    /// `execute_action` rejects unless the on-chain lower bound
+    /// `members - actions_this_epoch >= k_min`.
+    pub k_min: [u8; 8],
+    /// Successful actions in the current epoch (LE bytes; use
+    /// [`Self::epoch_actions`]). Reset to 0 by `open_epoch`.
+    pub epoch_actions: [u8; 8],
 }
 
 impl PoolConfig {
@@ -105,7 +112,9 @@ impl PoolConfig {
         + 8
         + VK_SERIALIZED_LEN
         + 1
-        + 32;
+        + 32
+        + 8
+        + 8;
 
     /// Reinterpret an account's bytes as a mutable `PoolConfig` (no copy).
     pub fn load_mut(data: &mut [u8]) -> Result<&mut Self, ProgramError> {
@@ -130,6 +139,29 @@ impl PoolConfig {
         u64::from_le_bytes(self.current_epoch)
     }
 
+    pub fn k_min(&self) -> u64 {
+        u64::from_le_bytes(self.k_min)
+    }
+
+    pub fn epoch_actions(&self) -> u64 {
+        u64::from_le_bytes(self.epoch_actions)
+    }
+
+    /// The on-chain lower bound on the anonymity set for the *next* action this
+    /// epoch: the number of deposited members who provably have not acted yet
+    /// (`members - actions_this_epoch`). This is a conservative floor — an
+    /// observer, unable to link nullifiers to commitments, generally sees the
+    /// full membership as candidates; this bound is what the program can prove
+    /// from its own state.
+    pub fn anonymity_lower_bound(&self) -> u64 {
+        self.next_index().saturating_sub(self.epoch_actions())
+    }
+
+    /// Record one successful action this epoch (increments the counter).
+    pub fn record_action(&mut self) {
+        self.epoch_actions = self.epoch_actions().saturating_add(1).to_le_bytes();
+    }
+
     /// Initialize an empty pool in place. Fails if already initialized or the
     /// depth is unsupported.
     pub fn initialize(
@@ -137,6 +169,7 @@ impl PoolConfig {
         authority: [u8; 32],
         bump: u8,
         depth: u8,
+        k_min: u64,
         verifying_key: &[u8; VK_SERIALIZED_LEN],
     ) -> Result<(), ProgramError> {
         if self.is_initialized != 0 {
@@ -164,6 +197,8 @@ impl PoolConfig {
         self.verifying_key.copy_from_slice(verifying_key);
         self.epoch_active = 0;
         self.screening_authority = [0u8; 32]; // screening off by default
+        self.k_min = k_min.to_le_bytes();
+        self.epoch_actions = 0u64.to_le_bytes();
         Ok(())
     }
 
@@ -184,6 +219,7 @@ impl PoolConfig {
             .ok_or(ProgramError::from(MirrorPoolError::EpochAlreadyOpen))?;
         self.current_epoch = next.to_le_bytes();
         self.epoch_active = 1;
+        self.epoch_actions = 0u64.to_le_bytes(); // reset the per-epoch action count
         Ok(next)
     }
 

@@ -19,20 +19,35 @@ fn instruction_unpack_never_panics_on_garbage() {
         let _ = Instruction::unpack(&bytes);
     }
     // Explicit truncations of a known tag are errors, not panics.
+    // Tags: 0=Init, 1=Deposit, 2=ExecuteAction, 3=NoOp, 4=Open, 5=Close,
+    // 6=SetScreening, 7=Register (8=VerifyMembership only with `bench`).
     assert!(Instruction::unpack(&[]).is_err(), "empty data");
     assert!(
-        Instruction::unpack(&[3, 0, 0]).is_err(),
-        "truncated ExecuteAction"
-    );
-    assert!(
-        Instruction::unpack(&[1]).is_err(),
+        Instruction::unpack(&[0]).is_err(),
         "InitializePool missing depth+vk"
     );
     assert!(
-        Instruction::unpack(&[2, 0, 0]).is_err(),
+        Instruction::unpack(&[1, 0, 0]).is_err(),
         "Deposit truncated commitment"
     );
+    assert!(
+        Instruction::unpack(&[2, 0, 0]).is_err(),
+        "truncated ExecuteAction"
+    );
     assert!(Instruction::unpack(&[99]).is_err(), "unknown tag");
+}
+
+/// SECURITY (1b): the benchmark-only `VerifyMembership` (tag 8) must NOT be a
+/// valid instruction in the default (deployed) build.
+#[cfg(not(feature = "bench"))]
+#[test]
+fn verify_membership_absent_from_default_build() {
+    let mut data = vec![8u8];
+    data.extend_from_slice(&[0u8; 384]); // proof + public inputs payload
+    assert!(
+        Instruction::unpack(&data).is_err(),
+        "VerifyMembership must not decode without the bench feature"
+    );
 }
 
 #[test]
@@ -55,9 +70,9 @@ fn verifying_key_parse_never_panics_on_garbage() {
 
 #[test]
 fn wrong_length_execute_action_is_rejected() {
-    // A borsh ExecuteAction with a proof that is one byte short must fail to
+    // A borsh ExecuteAction (tag 2) with a proof one byte short must fail to
     // decode rather than silently misparse.
-    let mut data = vec![3u8];
+    let mut data = vec![2u8];
     data.extend_from_slice(&[0u8; 255]); // proof is 256 bytes; supply 255
     data.extend_from_slice(&[0u8; 128]); // public inputs
     data.push(0); // selector

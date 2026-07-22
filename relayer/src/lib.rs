@@ -69,8 +69,10 @@ pub fn build_execute_ix(
     fee_payer: &Pubkey,
     job: &RelayJob,
 ) -> Result<Instruction> {
-    let (nullifier_pda, _bump) =
-        Pubkey::find_program_address(&[NULLIFIER_SEED, &job.nullifier_hash()], program_id);
+    let (nullifier_pda, _bump) = Pubkey::find_program_address(
+        &[NULLIFIER_SEED, pool.as_ref(), &job.nullifier_hash()],
+        program_id,
+    );
 
     let data = PoolIx::ExecuteAction {
         proof: job.proof,

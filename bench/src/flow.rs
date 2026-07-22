@@ -61,8 +61,11 @@ fn main() {
     let (pool, _bump) =
         Address::find_program_address(&[POOL_SEED, payer.pubkey().as_ref()], &program_id);
 
-    // 1) InitializePool { depth, verifying_key } (borsh variant 1).
-    let mut init_data = vec![1u8, TREE_DEPTH as u8];
+    // 1) InitializePool { depth, k_min, verifying_key } (tag 0). k_min = 1 for
+    //    the main pool so the existing action negatives keep their own error
+    //    codes; the min-k rejection is exercised on a dedicated pool below.
+    let mut init_data = vec![0u8, TREE_DEPTH as u8];
+    init_data.extend_from_slice(&1u64.to_le_bytes());
     init_data.extend_from_slice(&vk_bytes);
     send(
         &mut svm,
@@ -89,7 +92,7 @@ fn main() {
         let c = commitment(secret);
         tree.insert(c).unwrap();
         secrets.push(secret);
-        let mut data = vec![2u8];
+        let mut data = vec![1u8];
         data.extend_from_slice(&fr_to_bytes_be(&c));
         send(
             &mut svm,
@@ -113,7 +116,7 @@ fn main() {
                 AccountMeta::new(pool, false),
                 AccountMeta::new_readonly(payer.pubkey(), true),
             ],
-            data: vec![5u8],
+            data: vec![4u8],
         },
         "open_epoch",
     );
@@ -183,7 +186,7 @@ fn main() {
     // 5) Real transfer action (member 0): pool disburses SOL to a recipient,
     //    with the amount+recipient bound into the proof.
     let recipient = Address::new_unique();
-    let amount: u64 = 750_000_000;
+    let amount: u64 = 1_000_000_000; // 1 SOL — a fixed denomination (amount privacy)
     let mut params = amount.to_le_bytes().to_vec();
     params.extend_from_slice(recipient.as_ref());
     let (proof_t, pi_t) = prove_member(0, epoch, SELECTOR_TRANSFER, &params);
@@ -204,6 +207,24 @@ fn main() {
         exit(1);
     }
     println!("[transfer] recipient received {bal} lamports from the pool PDA");
+
+    // Denomination negative (Section 1d): a transfer of a non-denominated amount
+    // is rejected even with a valid, correctly-bound proof.
+    let odd_amount: u64 = 750_000_000; // not in DENOMINATIONS
+    let mut odd_params = odd_amount.to_le_bytes().to_vec();
+    odd_params.extend_from_slice(recipient.as_ref());
+    let (proof_d, pi_d) = prove_member(1, epoch, SELECTOR_TRANSFER, &odd_params);
+    let bad_denom = exec_ix(
+        program_id,
+        pool,
+        &proof_d,
+        &pi_d,
+        SELECTOR_TRANSFER,
+        &odd_params,
+        payer.pubkey(),
+        vec![AccountMeta::new(recipient, false)],
+    );
+    expect_reject(&mut svm, &payer, bad_denom, "non-denominated amount", 26);
 
     // 6) Negatives.
     // Replay the no-op with a different fee payer (distinct tx) → nullifier used.
@@ -273,7 +294,7 @@ fn main() {
                 AccountMeta::new(pool, false),
                 AccountMeta::new_readonly(payer.pubkey(), true),
             ],
-            data: vec![6u8], // CloseEpoch
+            data: vec![5u8], // CloseEpoch
         },
         "close_epoch",
     );
@@ -291,7 +312,8 @@ fn main() {
     expect_reject(&mut svm, &payer, closed, "epoch not active", 21);
 
     // Admin abuse (VALIDATION L5): re-initialization and an unauthorized crank.
-    let mut reinit = vec![1u8, TREE_DEPTH as u8];
+    let mut reinit = vec![0u8, TREE_DEPTH as u8];
+    reinit.extend_from_slice(&1u64.to_le_bytes());
     reinit.extend_from_slice(&vk_bytes);
     // Prepend a compute-budget ix so this isn't byte-identical to the original
     // init tx (which would be deduped as already-processed before running).
@@ -325,15 +347,225 @@ fn main() {
                 AccountMeta::new(pool, false),
                 AccountMeta::new_readonly(stranger.pubkey(), true),
             ],
-            data: vec![5u8], // OpenEpoch by a non-authority
+            data: vec![4u8], // OpenEpoch by a non-authority
         },
         "unauthorized crank",
         23, // NotPoolAuthority
     );
 
+    // --- Dedicated pool for the k_min invariant (Section 1c): reject below the
+    // minimum anonymity set, accept at/above it. ---
+    {
+        let auth_b = Keypair::new();
+        svm.airdrop(&auth_b.pubkey(), 5_000_000_000).unwrap();
+        let (pool_b, _bb) =
+            Address::find_program_address(&[POOL_SEED, auth_b.pubkey().as_ref()], &program_id);
+        let mut init_b = vec![0u8, TREE_DEPTH as u8];
+        init_b.extend_from_slice(&2u64.to_le_bytes()); // k_min = 2
+        init_b.extend_from_slice(&vk_bytes);
+        send(
+            &mut svm,
+            &auth_b,
+            Instruction {
+                program_id,
+                accounts: vec![
+                    AccountMeta::new(auth_b.pubkey(), true),
+                    AccountMeta::new(pool_b, false),
+                    AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
+                ],
+                data: init_b,
+            },
+            "init pool_b (k_min=2)",
+        );
+
+        let mut tree_b = MerkleTree::new(TREE_DEPTH);
+        let deposit_b = |svm: &mut LiteSVM, secret: Fr, tree: &mut MerkleTree| {
+            let c = commitment(secret);
+            tree.insert(c).unwrap();
+            let mut d = vec![1u8];
+            d.extend_from_slice(&fr_to_bytes_be(&c));
+            send(
+                svm,
+                &auth_b,
+                Instruction {
+                    program_id,
+                    accounts: vec![AccountMeta::new(pool_b, false)],
+                    data: d,
+                },
+                "deposit pool_b",
+            );
+        };
+        let s0 = Fr::from(5000u64);
+        deposit_b(&mut svm, s0, &mut tree_b);
+
+        // Open epoch on pool_b.
+        send(
+            &mut svm,
+            &auth_b,
+            Instruction {
+                program_id,
+                accounts: vec![
+                    AccountMeta::new(pool_b, false),
+                    AccountMeta::new_readonly(auth_b.pubkey(), true),
+                ],
+                data: vec![4u8],
+            },
+            "open pool_b",
+        );
+
+        // Build a no-op proof for member 0 against pool_b's current tree.
+        let mut prove_b = |tree: &MerkleTree, secret: Fr| {
+            let binding = action_binding(SELECTOR_NOOP, &[]);
+            let path = tree.proof(0).unwrap();
+            let a = build_witness(secret, &path, Fr::from(1u64), binding).unwrap();
+            let pi = a.public_inputs.to_bytes();
+            let sol = proof_to_solana(&prove(&pk, a.circuit, &mut rng).unwrap()).to_bytes();
+            let mut proof = [0u8; 256];
+            proof.copy_from_slice(&sol);
+            let mut limbs = [[0u8; 32]; 4];
+            for (i, l) in pi.iter().enumerate() {
+                limbs[i] = *l;
+            }
+            (proof, limbs)
+        };
+
+        // Only 1 member deposited → lower bound 1 < k_min 2 → rejected.
+        let (p0, pi0) = prove_b(&tree_b, s0);
+        let too_small = exec_ix(
+            program_id,
+            pool_b,
+            &p0,
+            &pi0,
+            SELECTOR_NOOP,
+            &[],
+            payer.pubkey(),
+            vec![AccountMeta::new_readonly(program_id, false)],
+        );
+        expect_reject(&mut svm, &payer, too_small, "anonymity set below k_min", 25);
+
+        // Deposit a 2nd member → lower bound 2 ≥ k_min 2 → accepted.
+        deposit_b(&mut svm, Fr::from(5001u64), &mut tree_b);
+        let (p0b, pi0b) = prove_b(&tree_b, s0);
+        let ok = exec_ix(
+            program_id,
+            pool_b,
+            &p0b,
+            &pi0b,
+            SELECTOR_NOOP,
+            &[],
+            payer.pubkey(),
+            vec![AccountMeta::new_readonly(program_id, false)],
+        );
+        send(&mut svm, &payer, ok, "execute at k_min threshold");
+        println!("[k_min] rejected at set=1<2, accepted at set=2>=2");
+    }
+
+    // --- Pool-scoped nullifiers (Section 1a): the SAME nullifier hash spent in
+    // one pool does NOT block the other. Two pools, identical single member →
+    // identical root + nullifier hash; the same proof executes in BOTH. ---
+    {
+        let member = Fr::from(7777u64);
+        let commit = commitment(member);
+        let make_pool = |svm: &mut LiteSVM, auth: &Keypair| -> Address {
+            let (p, _b) =
+                Address::find_program_address(&[POOL_SEED, auth.pubkey().as_ref()], &program_id);
+            let mut init = vec![0u8, TREE_DEPTH as u8];
+            init.extend_from_slice(&1u64.to_le_bytes());
+            init.extend_from_slice(&vk_bytes);
+            send(
+                svm,
+                auth,
+                Instruction {
+                    program_id,
+                    accounts: vec![
+                        AccountMeta::new(auth.pubkey(), true),
+                        AccountMeta::new(p, false),
+                        AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
+                    ],
+                    data: init,
+                },
+                "init pool",
+            );
+            let mut d = vec![1u8];
+            d.extend_from_slice(&fr_to_bytes_be(&commit));
+            send(
+                svm,
+                auth,
+                Instruction {
+                    program_id,
+                    accounts: vec![AccountMeta::new(p, false)],
+                    data: d,
+                },
+                "deposit",
+            );
+            send(
+                svm,
+                auth,
+                Instruction {
+                    program_id,
+                    accounts: vec![
+                        AccountMeta::new(p, false),
+                        AccountMeta::new_readonly(auth.pubkey(), true),
+                    ],
+                    data: vec![4u8],
+                },
+                "open",
+            );
+            p
+        };
+        let auth_x = Keypair::new();
+        let auth_y = Keypair::new();
+        svm.airdrop(&auth_x.pubkey(), 3_000_000_000).unwrap();
+        svm.airdrop(&auth_y.pubkey(), 3_000_000_000).unwrap();
+        let pool_x = make_pool(&mut svm, &auth_x);
+        let pool_y = make_pool(&mut svm, &auth_y);
+
+        // One proof (identical trees ⇒ identical root + nullifier hash).
+        let mut tree = MerkleTree::new(TREE_DEPTH);
+        tree.insert(commit).unwrap();
+        let binding = action_binding(SELECTOR_NOOP, &[]);
+        let assignment =
+            build_witness(member, &tree.proof(0).unwrap(), Fr::from(1u64), binding).unwrap();
+        let pib = assignment.public_inputs.to_bytes();
+        let sol = proof_to_solana(&prove(&pk, assignment.circuit, &mut rng).unwrap()).to_bytes();
+        let mut proof = [0u8; 256];
+        proof.copy_from_slice(&sol);
+        let mut pi = [[0u8; 32]; 4];
+        for (i, l) in pib.iter().enumerate() {
+            pi[i] = *l;
+        }
+
+        let cpi = vec![AccountMeta::new_readonly(program_id, false)];
+        let ix_x = exec_ix(
+            program_id,
+            pool_x,
+            &proof,
+            &pi,
+            SELECTOR_NOOP,
+            &[],
+            payer.pubkey(),
+            cpi.clone(),
+        );
+        send(&mut svm, &payer, ix_x, "action in pool_x");
+        // The SAME nullifier hash, now in pool_y — must succeed (separate namespace).
+        let ix_y = exec_ix(
+            program_id,
+            pool_y,
+            &proof,
+            &pi,
+            SELECTOR_NOOP,
+            &[],
+            payer.pubkey(),
+            cpi,
+        );
+        send(&mut svm, &payer, ix_y, "same nullifier in pool_y");
+        println!("[nullifier-scope] same nullifier hash spent independently in two pools");
+    }
+
     println!(
-        "\n=== flow PASS: no-op + real transfer executed via pool PDA; \
-         replay/binding/tampered/wrong-epoch/closed-epoch/re-init/unauthorized all rejected ==="
+        "\n=== flow PASS: no-op + denominated transfer via pool PDA; \
+         replay/binding/tampered/wrong-epoch/closed-epoch/re-init/unauthorized/\
+         bad-denomination/min-k/pool-scoped-nullifier all enforced ==="
     );
 }
 
@@ -351,8 +583,9 @@ fn exec_ix(
     fee_payer: Address,
     trailing: Vec<AccountMeta>,
 ) -> Instruction {
-    let (nullifier_pda, _b) = Address::find_program_address(&[NULLIFIER_SEED, &pi[1]], &program_id);
-    let mut data = vec![3u8];
+    let (nullifier_pda, _b) =
+        Address::find_program_address(&[NULLIFIER_SEED, pool.as_ref(), &pi[1]], &program_id);
+    let mut data = vec![2u8];
     data.extend_from_slice(proof);
     for limb in pi {
         data.extend_from_slice(limb);

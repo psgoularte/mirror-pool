@@ -33,11 +33,14 @@ jobs:
       - name: rustfmt
         run: cargo fmt --all -- --check
 
+      # Lint everything, including the `bench`-gated code paths.
       - name: clippy
         run: cargo clippy --workspace --all-targets --all-features
 
-      - name: test
-        run: cargo test --workspace --all-features
+      # Default features = the DEPLOYED configuration (no `bench`). This is the
+      # run that exercises `verify_membership_absent_from_default_build`.
+      - name: test (default features = deployed config)
+        run: cargo test --workspace
 
   # The on-chain program must compile to SBF bytecode. This gate catches
   # BPF-only breakage (host-forbidden syscalls, oversized stack frames) that
@@ -63,22 +66,12 @@ jobs:
           sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
 
-      - name: cargo build-sbf
+      # The DEPLOYED artifact: default features, so the benchmark-only
+      # VerifyMembership instruction is NOT in the bytecode.
+      - name: cargo build-sbf (deployed artifact)
         run: cargo build-sbf --manifest-path program/Cargo.toml
 
-      # Prove a real arkworks proof verifies on-chain, under the CU budget.
-      # The bench crate is workspace-excluded (own Solana version), so it runs
-      # via its own manifest.
-      - name: generate CU benchmark fixture
-        run: cargo test -p mirror-pool-program --test gen_fixture -- --ignored --nocapture
-
-      - name: compute-unit benchmark (verification < 200k CU)
-        run: cargo run --release --manifest-path bench/Cargo.toml --bin cu-bench
-
-      - name: end-to-end init + deposit (on-chain root == reference)
-        run: cargo run --release --manifest-path bench/Cargo.toml --bin e2e
-
-      - name: full flow (prove → execute_action → nullifier/replay/negatives)
+      - name: full flow (prove → execute_action → all negatives/invariants)
         run: cargo run --release --manifest-path bench/Cargo.toml --bin flow
 
       - name: compliance (screening hook + selective disclosure)
@@ -86,3 +79,11 @@ jobs:
 
       - name: privacy trace red-team (fee payer, anonymity set, no linkage)
         run: cargo run --release --manifest-path bench/Cargo.toml --bin trace
+
+      # The CU benchmark needs the bench-featured build (VerifyMembership). This
+      # rebuilds the .so with the feature; it does NOT ship.
+      - name: cargo build-sbf (bench feature) + CU benchmark < 200k CU
+        run: |
+          cargo build-sbf --manifest-path program/Cargo.toml --features bench
+          cargo test -p mirror-pool-program --features bench --test gen_fixture -- --ignored --nocapture
+          cargo run --release --manifest-path bench/Cargo.toml --bin cu-bench

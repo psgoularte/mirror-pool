@@ -79,8 +79,9 @@ fn main() {
     let (pool, _b) =
         Address::find_program_address(&[POOL_SEED, payer.pubkey().as_ref()], &program_id);
 
-    // Initialize.
-    let mut init = vec![1u8, TREE_DEPTH as u8];
+    // Initialize (k_min = 1; this scenario exercises deposits/disclosure, not actions).
+    let mut init = vec![0u8, TREE_DEPTH as u8];
+    init.extend_from_slice(&1u64.to_le_bytes());
     init.extend_from_slice(&vk_bytes);
     submit(
         &mut svm,
@@ -101,7 +102,7 @@ fn main() {
     let screener = Keypair::new();
     svm.airdrop(&screener.pubkey(), 1_000_000_000).unwrap();
     // Enable screening (variant 7).
-    let mut set = vec![7u8];
+    let mut set = vec![6u8];
     set.extend_from_slice(screener.pubkey().as_ref());
     submit(
         &mut svm,
@@ -119,7 +120,7 @@ fn main() {
 
     let secret = Fr::from(0xC0FFEEu64);
     let c = commitment(secret);
-    let mut dep = vec![2u8];
+    let mut dep = vec![1u8];
     dep.extend_from_slice(&fr_to_bytes_be(&c));
 
     // Deposit WITHOUT the screener → must be rejected (ScreeningRequired = 24).
@@ -161,7 +162,7 @@ fn main() {
         Address::find_program_address(&[VIEWING_SEED, &fr_to_bytes_be(&c)], &program_id);
 
     // RegisterViewingKey (variant 8): commitment || auditor || vec(sealed).
-    let mut data = vec![8u8];
+    let mut data = vec![7u8];
     data.extend_from_slice(&fr_to_bytes_be(&c));
     data.extend_from_slice(&auditor.public_bytes());
     data.extend_from_slice(&(sealed.len() as u32).to_le_bytes());

@@ -6,8 +6,12 @@
 //! bytes. `#[ignore]`d — run explicitly before the benchmark:
 //!
 //! ```sh
-//! cargo test -p mirror-pool-program --test gen_fixture -- --ignored
+//! cargo test -p mirror-pool-program --features bench --test gen_fixture -- --ignored
 //! ```
+//!
+//! Requires the `bench` feature (the fixture builds the benchmark-only
+//! `VerifyMembership` instruction). Without it, this test compiles to nothing.
+#![cfg(feature = "bench")]
 
 mod common;
 

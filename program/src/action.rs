@@ -29,6 +29,13 @@ pub const SELECTOR_NOOP: u8 = 0;
 /// Selector for the native SOL transfer action (real integration).
 pub const SELECTOR_TRANSFER: u8 = 1;
 
+/// Fixed denominations (lamports) the transfer action may move: 0.1, 1, and
+/// 10 SOL. Restricting to a small set makes the amount **non-distinguishing** —
+/// many members move the identical value, so the amount cannot re-link an
+/// action to a member (Tornado-style). The amount is also proof-bound, so a
+/// relayer cannot change it.
+pub const DENOMINATIONS: [u64; 3] = [100_000_000, 1_000_000_000, 10_000_000_000];
+
 /// Digest of an action's parameters, matching `common::poseidon::params_digest`.
 /// Empty params → zero; otherwise SHA-256 with the top byte cleared (so the
 /// value is a canonical BN254 field element with no reduction).
@@ -145,6 +152,11 @@ impl Action for TransferAction {
                 .try_into()
                 .map_err(|_| ProgramError::from(MirrorPoolError::InvalidInstructionData))?,
         );
+        // Amount privacy: only fixed denominations are allowed so the value is
+        // not a distinguishing feature.
+        if !DENOMINATIONS.contains(&amount) {
+            return Err(MirrorPoolError::InvalidDenomination.into());
+        }
         let recipient_key = Pubkey::new_from_array(
             ctx.params[8..40]
                 .try_into()

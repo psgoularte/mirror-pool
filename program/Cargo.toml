@@ -35,6 +35,10 @@ no-entrypoint = []
 # build free of `unexpected_cfgs` warnings under CI's `-D warnings`.
 custom-heap = []
 custom-panic = []
+# Compiles in the benchmark-only `VerifyMembership` instruction (and its test
+# fixtures). OFF by default, so the deployed `build-sbf` artifact never contains
+# it. Enable only to run the compute-unit benchmark.
+bench = []
 
 [lints.rust]
 # `target_os = "solana"` is only defined by the SBF target; teach the host

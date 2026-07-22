@@ -50,14 +50,16 @@ pub fn process_instruction(
     instruction_data: &[u8],
 ) -> ProgramResult {
     match Instruction::unpack(instruction_data)? {
+        #[cfg(feature = "bench")]
         Instruction::VerifyMembership {
             proof,
             public_inputs,
         } => process_verify_membership(accounts, &proof, &public_inputs),
         Instruction::InitializePool {
             depth,
+            k_min,
             verifying_key,
-        } => process_initialize_pool(program_id, accounts, depth, &verifying_key),
+        } => process_initialize_pool(program_id, accounts, depth, k_min, &verifying_key),
         Instruction::Deposit { commitment } => process_deposit(program_id, accounts, commitment),
         Instruction::ExecuteAction {
             proof,
@@ -87,7 +89,9 @@ pub fn process_instruction(
 }
 
 /// `VerifyMembership`: verify a proof against a VK supplied in the first
-/// account. Kept from M3 for the compute-unit benchmark.
+/// account. **Benchmark-only** (`bench` feature) — compiled out of the deployed
+/// program, so its unchecked VK-account read is never part of production surface.
+#[cfg(feature = "bench")]
 fn process_verify_membership(
     accounts: &[AccountInfo],
     proof: &[u8; PROOF_LEN],
@@ -108,6 +112,7 @@ fn process_initialize_pool(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
     depth: u8,
+    k_min: u64,
     verifying_key: &[u8; verifier::VK_SERIALIZED_LEN],
 ) -> ProgramResult {
     let account_iter = &mut accounts.iter();
@@ -144,9 +149,13 @@ fn process_initialize_pool(
 
     let mut data = pool_account.try_borrow_mut_data()?;
     let config = PoolConfig::load_mut(&mut data)?;
-    config.initialize(payer.key.to_bytes(), bump, depth, verifying_key)?;
+    config.initialize(payer.key.to_bytes(), bump, depth, k_min, verifying_key)?;
 
-    msg!("mirror-pool: pool initialized (depth {})", depth);
+    msg!(
+        "mirror-pool: pool initialized (depth {}, k_min {})",
+        depth,
+        k_min
+    );
     Ok(())
 }
 
@@ -326,6 +335,12 @@ fn process_execute_action(
         if *epoch_id != epoch_to_bytes(config.current_epoch()) {
             return Err(MirrorPoolError::EpochMismatch.into());
         }
+        // Minimum anonymity set: refuse to act unless the on-chain lower bound
+        // (members not yet acted this epoch) is at least k_min. This turns the
+        // single-action-window risk into an enforced invariant, not a warning.
+        if config.anonymity_lower_bound() < config.k_min() {
+            return Err(MirrorPoolError::AnonymitySetTooSmall.into());
+        }
         // Root: must be a known recent root (survives concurrent deposits).
         if !config.is_known_root(merkle_root) {
             return Err(MirrorPoolError::UnknownRoot.into());
@@ -342,8 +357,12 @@ fn process_execute_action(
     };
 
     // --- Nullifier: reject reuse, then create the marker account. ---
+    // The seed is scoped to the pool (`["nullifier", pool, hash]`) so a nullifier
+    // spent in one pool cannot collide with or grief another pool under the same
+    // program.
+    let pool_key = pool_account.key.to_bytes();
     let (expected_nullifier, null_bump) =
-        Pubkey::find_program_address(&[NULLIFIER_SEED, nullifier_hash], program_id);
+        Pubkey::find_program_address(&[NULLIFIER_SEED, &pool_key, nullifier_hash], program_id);
     if expected_nullifier != *nullifier_account.key {
         return Err(MirrorPoolError::InvalidNullifierAddress.into());
     }
@@ -364,9 +383,16 @@ fn process_execute_action(
             nullifier_account.clone(),
             system_program.clone(),
         ],
-        &[&[NULLIFIER_SEED, nullifier_hash, &[null_bump]]],
+        &[&[NULLIFIER_SEED, &pool_key, nullifier_hash, &[null_bump]]],
     )?;
     nullifier_account.try_borrow_mut_data()?[0] = 1;
+
+    // Record the action for the per-epoch anonymity-set accounting (committed
+    // together with the nullifier, before the CPI).
+    {
+        let mut data = pool_account.try_borrow_mut_data()?;
+        PoolConfig::load_mut(&mut data)?.record_action();
+    }
 
     // --- Execute the action, signed by the pool PDA. ---
     let pool_seeds: &[&[u8]] = &[POOL_SEED, &authority, core::slice::from_ref(&bump)];

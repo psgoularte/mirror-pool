@@ -12,6 +12,7 @@ use mirror_pool_circuit::Fr;
 use mirror_pool_common::merkle::MerkleTree;
 use mirror_pool_common::poseidon;
 use mirror_pool_common::TREE_DEPTH;
+#[cfg(feature = "bench")]
 use mirror_pool_program::instruction::Instruction;
 use mirror_pool_program::verifier::{NUM_PUBLIC_INPUTS, PROOF_LEN};
 
@@ -25,6 +26,8 @@ pub struct Fixture {
     pub proof: [u8; PROOF_LEN],
     pub public_inputs: [[u8; 32]; NUM_PUBLIC_INPUTS],
     /// Ready-to-send `VerifyMembership` instruction data (tag + payload).
+    /// Only built with the `bench` feature (the instruction is benchmark-only).
+    #[cfg(feature = "bench")]
     pub instruction_data: Vec<u8>,
 }
 
@@ -58,6 +61,7 @@ pub fn membership_fixture() -> Fixture {
         [pi_bytes[0], pi_bytes[1], pi_bytes[2], pi_bytes[3]];
     let proof_flat = sol_proof.to_bytes();
 
+    #[cfg(feature = "bench")]
     let instruction_data = Instruction::VerifyMembership {
         proof: proof_flat,
         public_inputs,
@@ -69,6 +73,7 @@ pub fn membership_fixture() -> Fixture {
         vk_bytes: sol_vk.to_bytes(),
         proof: proof_flat,
         public_inputs,
+        #[cfg(feature = "bench")]
         instruction_data,
     }
 }
