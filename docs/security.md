@@ -15,6 +15,11 @@ protocol. Read this document before deploying anything you care about.
 >    conditions (busy epochs, a trusted relayer). See the
 >    [threat model](../ARCHITECTURE.md#threat-model).
 
+Live-execution evidence (the deployed devnet program running the full flow and
+rejecting the documented negatives, with on-chain-verifiable signatures) is in
+[`PROOF.md`](./PROOF.md) — a functional proof on devnet, **not** a multi-party
+soak, a production setup, or an audit.
+
 ## Trusted setup
 
 Groth16 needs a per-circuit trusted setup. The setup's secret randomness ("toxic

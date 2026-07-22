@@ -67,7 +67,7 @@ attacks the public trace:
 - **Explicit CU request:** the relayer prepends `ComputeBudgetInstruction::set_compute_unit_limit`; `flow`/`cu-bench` too.
 - **Tx size:** proof (256) + 4 public inputs (128) + accounts fit; all txs land.
 - **Deploys and runs on a real validator:** the `--arch v3` artifact was deployed to a local `solana-test-validator` (real Agave 4.1.1) and the **full flow ran against the deployed program id over RPC** via the CLI — `init-pool`, `deposit`×2, `crank open`, and a relayer-paid `execute` (on-chain proof verification + PDA-signed CPI), each a confirmed transaction.
-- **Live devnet:** **deployed** — program id `4YrUSMP2gG9v9SJAgQPNYpzvUSxqWVBBQwdc7g52xYPe` ([explorer](https://explorer.solana.com/address/4YrUSMP2gG9v9SJAgQPNYpzvUSxqWVBBQwdc7g52xYPe?cluster=devnet)). The `--arch v3` artifact and CLI flow are identical to the validated localnet run. See [`deployment.md`](./deployment.md).
+- **Live devnet:** **deployed and exercised end-to-end** — program id `4YrUSMP2gG9v9SJAgQPNYpzvUSxqWVBBQwdc7g52xYPe` ([explorer](https://explorer.solana.com/address/4YrUSMP2gG9v9SJAgQPNYpzvUSxqWVBBQwdc7g52xYPe?cluster=devnet)). Init → 3 deposits → open → 2 relayer-paid `execute_action`s (on-chain Groth16 verify, **108,367 CU** measured on-chain) → close, plus `NullifierAlreadyUsed` and `AnonymitySetTooSmall` rejected live, all with `Finalized` signatures in [`PROOF.md`](./PROOF.md). See also [`deployment.md`](./deployment.md).
 
 ## Level 5 — Robustness / abuse resistance ✅
 

@@ -33,6 +33,7 @@ that indirection is the core unlinkability primitive.
 | [`docs/compliance.md`](./docs/compliance.md) | Association sets, ZK inclusion, viewing keys, screening |
 | [`docs/circuit.md`](./docs/circuit.md) | Membership statement, Poseidon invariant, Phase-2 ceremony |
 | [`docs/deployment.md`](./docs/deployment.md) | Live devnet id, `--arch v3` build, RPC flow, local iteration |
+| [`docs/PROOF.md`](./docs/PROOF.md) | End-to-end devnet run with real, on-chain-verifiable tx signatures |
 | [`docs/testing.md`](./docs/testing.md) | Acceptance checklist mapped to concrete tests/binaries |
 
 ## How it works
@@ -89,7 +90,9 @@ Stated as facts about this design, not comparisons:
 - **Live on devnet** — deploys with `--arch v3` and the full flow runs against
   the deployed program over RPC. Program id
   [`4YrUSMP2gG9v9SJAgQPNYpzvUSxqWVBBQwdc7g52xYPe`](https://explorer.solana.com/address/4YrUSMP2gG9v9SJAgQPNYpzvUSxqWVBBQwdc7g52xYPe?cluster=devnet)
-  (and validated on a local Agave validator). See [`docs/deployment.md`](./docs/deployment.md).
+  (and validated on a local Agave validator). See [`docs/deployment.md`](./docs/deployment.md),
+  and [`docs/PROOF.md`](./docs/PROOF.md) for the end-to-end run with real,
+  on-chain-verifiable devnet transaction signatures.
 
 ## Threat model (summary)
 
