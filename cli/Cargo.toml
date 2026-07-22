@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 mirror-pool-common = { workspace = true, features = ["crypto"] }
 mirror-pool-circuit.workspace = true
+mirror-pool-anonymity = { path = "../anonymity" }
 # Reused for RelayJob + the on-chain submit path (pulls solana-client 2.3).
 mirror-pool-relayer = { path = "../relayer" }
 mirror-pool-program = { path = "../program", features = ["no-entrypoint"] }

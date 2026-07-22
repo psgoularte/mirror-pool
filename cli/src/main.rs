@@ -23,12 +23,10 @@ use mirror_pool_circuit::prover::{build_witness, dev_setup, prove, PublicInputs}
 use mirror_pool_circuit::solana::{proof_to_solana, vk_to_solana};
 use mirror_pool_common::compliance::{seal_disclosure, ViewingKeypair};
 use mirror_pool_common::merkle::MerkleTree;
-use mirror_pool_common::poseidon::{action_binding, commitment, nullifier_hash};
+use mirror_pool_common::poseidon::{action_binding, commitment};
 use mirror_pool_common::{fr_from_bytes_be, fr_to_bytes_be, TREE_DEPTH};
 use mirror_pool_relayer::{pool_pda, relay, RelayJob};
 use rand::rngs::OsRng;
-use rand::rngs::StdRng;
-use rand::SeedableRng;
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::{
     commitment_config::CommitmentConfig,
@@ -87,10 +85,17 @@ enum Command {
         #[arg(long)]
         auditor_pubkey: String,
     },
-    /// Simulate N members over E epochs and report the anonymity set per epoch.
+    /// Simulate a pool and report **min-entropy effective-k** per epoch, over
+    /// the association set and over all deposits (the delta is the Sybil
+    /// exposure), plus the dominance-adjusted figure.
     Sim {
+        /// Honest, independently-funded, associated members.
         #[arg(long, default_value_t = 64)]
         members: u64,
+        /// Unassociated Sybil notes controlled by a single funder (inflate the
+        /// naive count without adding honest anonymity).
+        #[arg(long, default_value_t = 0)]
+        sybils: u64,
         #[arg(long, default_value_t = 8)]
         actors: u64,
         #[arg(long, default_value_t = 3)]
@@ -180,9 +185,10 @@ fn main() -> Result<()> {
         } => cmd_disclose(&secret, &auditor_pubkey),
         Command::Sim {
             members,
+            sybils,
             actors,
             epochs,
-        } => cmd_sim(members, actors, epochs),
+        } => cmd_sim(members, sybils, actors, epochs),
         Command::InitPool {
             rpc_url,
             keypair,
@@ -352,54 +358,82 @@ fn cmd_disclose(secret_hex: &str, auditor_pubkey_hex: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_sim(members: u64, actors: u64, epochs: u64) -> Result<()> {
+fn cmd_sim(members: u64, sybils: u64, actors: u64, epochs: u64) -> Result<()> {
+    use mirror_pool_anonymity::{measure, Bucket, Note};
     if actors > members {
         return Err(anyhow!(
-            "actors ({actors}) cannot exceed members ({members})"
+            "actors ({actors}) cannot exceed honest members ({members})"
         ));
     }
-    // Deterministic simulation of the anonymity set achieved per epoch.
-    let mut rng = StdRng::seed_from_u64(0x51_A1);
-    let mut tree = MerkleTree::new(TREE_DEPTH);
-    let mut secrets = Vec::new();
-    for _ in 0..members {
-        let s = Fr::rand(&mut rng);
-        tree.insert(commitment(s))
-            .map_err(|e| anyhow!("insert: {e}"))?;
-        secrets.push(s);
-    }
-    println!("mirror-pool sim: {members} members, {actors} actors/epoch, {epochs} epochs");
-    println!("pool root: {}", hex::encode(fr_to_bytes_be(&tree.root())));
-    let mut total_actions = 0u64;
+    // Candidate notes: `members` honest, independently-funded, associated notes;
+    // `sybils` unassociated notes all controlled by one funder (id 0).
+    let mut notes: Vec<Note> = (0..members)
+        .map(|i| Note {
+            funder: i + 1,
+            associated: true,
+        })
+        .collect();
+    notes.extend((0..sybils).map(|_| Note {
+        funder: 0,
+        associated: false,
+    }));
+
+    // Observable buckets an actor might land in (denomination × action-type):
+    // no-op (type 0, denom 0) and the three transfer denominations (type 1).
+    let buckets = [
+        Bucket {
+            denomination: 0,
+            action_type: 0,
+        },
+        Bucket {
+            denomination: 100_000_000,
+            action_type: 1,
+        },
+        Bucket {
+            denomination: 1_000_000_000,
+            action_type: 1,
+        },
+        Bucket {
+            denomination: 10_000_000_000,
+            action_type: 1,
+        },
+    ];
+
+    println!(
+        "mirror-pool sim: {members} honest members, {sybils} sybils, {actors} actors/epoch, {epochs} epochs"
+    );
+    println!(
+        "metric: min-entropy effective-k = 1/max_i p_i (single-guess adversary; PET'02, FoSSaCS'09)\n"
+    );
+
+    let report = measure(&notes, &buckets);
     for epoch in 1..=epochs {
-        // The anonymity set for this window is the number of distinct members
-        // who acted: each produces a unique nullifier, indistinguishable among
-        // the `members`-strong set.
-        use std::collections::HashSet;
-        let mut nullifiers = HashSet::new();
-        for a in 0..actors {
-            let member = ((epoch.wrapping_mul(31).wrapping_add(a)) % members) as usize;
-            let nh = nullifier_hash(secrets[member], Fr::from(epoch));
-            nullifiers.insert(fr_to_bytes_be(&nh));
-        }
-        total_actions += nullifiers.len() as u64;
-        let k = nullifiers.len();
-        // The cryptographic anonymity set is the whole pool (any member could
-        // have produced any action). The practical risk is timing: a window
-        // with a single action is easier to correlate across epochs.
-        let warn = if k <= 1 {
-            "  ⚠ single action this window — vulnerable to timing correlation; widen the window"
+        // Every epoch draws from the same candidate set; the honest figure is
+        // over the association set, the naive figure over all deposits.
+        let assoc = report.over_associated.worst_uniform_effective_k;
+        let all = report.over_all.worst_uniform_effective_k;
+        let dom = report.over_all.worst_dominance_adjusted_effective_k;
+        let warn = if actors <= 1 {
+            "  ⚠ single action this window — timing-correlatable regardless of k"
         } else {
             ""
         };
         println!(
-            "  epoch {epoch}: {k} action(s), anonymity set = {members} members (1-in-{members}){warn}"
+            "  epoch {epoch}: effective-k over associated = {assoc:.1}, over all deposits = {all:.1} \
+             (Sybil gap {:.1}); dominance-adjusted = {dom:.1}{warn}",
+            report.sybil_gap()
         );
     }
     println!(
-        "total {total_actions} actions. Cryptographic anonymity set per action = pool size \
-         ({members}). Realized privacy also requires >1 action per window (timing) and a \
-         relayer paying fees (fee-payer linkage) — see the threat model."
+        "\nWorst-bucket effective-k: {:.1} over the association set vs {:.1} over all deposits.",
+        report.over_associated.worst_uniform_effective_k, report.over_all.worst_uniform_effective_k
+    );
+    println!(
+        "The gap ({:.1}) is the Sybil exposure: effective-k over all deposits is inflatable by \
+         unassociated notes, so only the association-set figure is an honest floor. A colluding \
+         funder controlling a bucket reduces it further (dominance-adjusted above). See the \
+         threat model; k_min on-chain bounds membership, NOT honest anonymity.",
+        report.sybil_gap()
     );
     Ok(())
 }

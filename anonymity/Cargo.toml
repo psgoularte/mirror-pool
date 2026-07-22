@@ -1,0 +1,10 @@
+[package]
+name = "mirror-pool-anonymity"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Off-chain anonymity measurement for mirror-pool: min-entropy effective-k, per bucket, over the association set. A measurement instrument — never an on-chain guarantee."
+
+[dependencies]

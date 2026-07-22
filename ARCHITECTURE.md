@@ -247,6 +247,58 @@ this bound is `≥ k_min`, a per-pool parameter set at `initialize_pool`.
   deposit-screening hook or requiring staked/attested deposits. `k_min` is a
   guard against *empty-window* leakage, not a defense against a Sybil adversary.
 
+## Anonymity measurement: min-entropy effective-k (off-chain)
+
+The cheap on-chain `k_min` count is a *floor*, not the real privacy figure. The
+`anonymity` crate computes the honest metric an observer would infer, as a
+**measurement/reporting instrument** — never asserted on-chain (the on-chain
+program keeps the constant-cost `k_min` check).
+
+**Metric.** We report **min-entropy effective-k**,
+`effective_k = 2^{H∞} = 1 / maxᵢ pᵢ`, where `pᵢ` is the adversary's posterior
+that participant *i* initiated an observed action. `1/max pᵢ` is exactly the
+single-guess adversary's success bound — the honest worst case, not an average
+[Serjantov–Danezis 2002; Díaz–Seys–Claessens–Preneel 2002; Smith 2009].
+
+**Computed honestly, three ways:**
+
+1. **Over the association set, not all deposits.** An effective-k over *all*
+   permissionless deposits is meaningless when the set is Sybil-inflatable (the
+   `k_min` limitation above). We report it over the attested/associated set
+   *and* over all deposits; **the delta is the Sybil exposure** — the same gap
+   the threat model names, now quantified. (This is why §A and the association
+   layer are one mechanism: the association set is the precondition that makes
+   the metric meaningful.)
+2. **Per bucket.** An observer partitions actions by `denomination ×
+   action-type`; you are only anonymous *within* your bucket. We report the
+   **worst-case effective-k across buckets**, never a pooled figure that hides a
+   thin one. (mirror-pool deposits are not denomination-bound, so buckets do not
+   thin the per-member set *here*; the framework still reports per bucket for
+   denomination-segregated integrations and to flag single-action buckets.)
+3. **Dominance / homogeneity.** A bucket of nominal size `k` where one funder
+   controls `m` notes has effective anonymity `≈ k − m` against a colluding
+   funder [Sweeney 2002 (k-anonymity); Machanavajjhala et al. 2007 (l-diversity);
+   Li–Li–Venkatasubramanian 2007 (t-closeness)].
+
+`cli sim` reports all of these; e.g. `8 honest + 40 sybils` yields effective-k
+`8` over the association set vs `48` over all deposits — a Sybil gap of `40`.
+
+## Synchronized rounds & the Anonymity Trilemma
+
+Epoch windows are not an arbitrary latency knob. The **Anonymity Trilemma**
+[Das–Meiser–Mohammadi–Kate, IEEE S&P 2018] proves an anonymity system cannot
+simultaneously have strong anonymity, low bandwidth overhead, and low latency —
+you choose two. Its user-coordinated extension [Das et al., PoPETs 2020] bounds
+exactly mirror-pool's model, where participants proactively synchronize.
+
+mirror-pool deliberately spends **latency** — members wait for a busy shared
+epoch window — to buy anonymity at low bandwidth overhead (no cover traffic).
+The chosen operating point on the latency ↔ effective-k curve is: *effective-k
+grows with the number of distinct actors that land in an open window; the
+operator trades window duration for that count.* Honest limit: a short or thin
+window buys little, and the trilemma says there is no free lunch — you pay in
+latency. `close_epoch`/`open_epoch` are the operator's control over that point.
+
 ## Relayer & epoch batcher (milestone 6)
 
 The `relayer` crate is **core, not optional**: it submits `execute_action` and
@@ -373,3 +425,28 @@ pays the fee.*
 | 6 | Epochs + relayer + one real integration | ✅ done |
 | 7 | Compliance (viewing keys + screening hook) | ✅ done |
 | 8 | Threat model + docs + demo (`demo.sh`, CLI `sim`) | ✅ done |
+
+## References
+
+Primary sources for the anonymity metric, the trilemma framing, and the
+association-set / compliance design. Claims above are derived from these, not
+from any protocol implementation.
+
+- G. Danezis & A. Serjantov. *Towards an Information-Theoretic Metric for
+  Anonymity.* PET 2002.
+- C. Díaz, S. Seys, J. Claessens & B. Preneel. *Towards Measuring Anonymity.*
+  PET 2002.
+- G. Smith. *On the Foundations of Quantitative Information Flow.* FoSSaCS 2009.
+  (min-entropy / single-guess leakage.)
+- L. Sweeney. *k-anonymity: A Model for Protecting Privacy.* 2002.
+- A. Machanavajjhala, J. Gehrke, D. Kifer & M. Venkitasubramaniam. *l-diversity:
+  Privacy Beyond k-anonymity.* 2007.
+- N. Li, T. Li & S. Venkatasubramanian. *t-closeness: Privacy Beyond
+  k-anonymity and l-diversity.* ICDE 2007.
+- D. Das, S. Meiser, E. Mohammadi & A. Kate. *Anonymity Trilemma: Strong
+  Anonymity, Low Bandwidth Overhead, Low Latency — Choose Two.* IEEE S&P 2018.
+- D. Das, S. Meiser, E. Mohammadi & A. Kate. *Comprehensive Anonymity Trilemma:
+  User Coordination is not enough.* PoPETs 2020.
+- V. Buterin, J. Illum, M. Nadler, F. Schär & A. Soleimani. *Blockchain Privacy
+  and Regulatory Compliance: Towards a Practical Equilibrium.* 2023.
+  (Association sets, ASPs, inclusion/exclusion proofs, separating equilibrium.)

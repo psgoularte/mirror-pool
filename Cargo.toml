@@ -4,7 +4,7 @@
 # truth for the pinned Poseidon parameters); every other crate imports them.
 [workspace]
 resolver = "2"
-members = ["common", "circuit", "program", "relayer", "cli"]
+members = ["common", "circuit", "program", "relayer", "cli", "anonymity"]
 # The compute-unit benchmark keeps a separate (newer) Solana dependency graph so
 # it never has to unify with the program's solana-program 2.3. It talks to the
 # rest of the project only through the compiled `.so` and a fixture file.

@@ -2479,6 +2479,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "mirror-pool-anonymity"
+version = "0.1.0"
+
+[[package]]
 name = "mirror-pool-circuit"
 version = "0.1.0"
 dependencies = [
@@ -2510,6 +2514,7 @@ dependencies = [
  "ark-std 0.5.0",
  "clap",
  "hex",
+ "mirror-pool-anonymity",
  "mirror-pool-circuit",
  "mirror-pool-common",
  "mirror-pool-program",
