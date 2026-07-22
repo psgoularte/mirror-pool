@@ -1,8 +1,13 @@
-# mirror-pool — VALIDATION results
+# Testing & acceptance evidence
 
-Outcome of running every gate in [`VALIDATION.md`](./VALIDATION.md), refreshed
-after the hardening pass. Each gate maps to the concrete test/binary that
-enforces it. Reproduce with `./demo.sh` plus `cargo test --workspace`.
+How mirror-pool is known to work, and how to reproduce it. The project was
+developed against an adversarial acceptance checklist (green tests are necessary
+but not sufficient for a ZK/privacy system); the levels below are that checklist,
+each mapped to the concrete test or binary that enforces it.
+
+**Reproduce everything:** `./demo.sh` (end-to-end on the real SBF bytecode via an
+in-process validator) plus `cargo test --workspace`. Compute-unit numbers and
+the effective-k Sybil-gap demo are called out inline.
 
 ## Level 0 — Build & toolchain sanity ✅
 
@@ -54,15 +59,15 @@ attacks the public trace:
 > ⚠ **Honest limitation:** `k_min` bounds *program-visible* membership, **not**
 > honest anonymity. Permissionless deposits let a Sybil adversary inflate the
 > count; enable the screening hook or staked deposits for real use. Documented in
-> `SECURITY.md` and the threat model. No privacy claim exceeds this.
+> [`security.md`](./security.md) and the threat model. No privacy claim exceeds this.
 
-## Level 4 — Solana deployability ✅ (devnet deploy deferred on funding)
+## Level 4 — Solana deployability ✅ (live on devnet)
 
 - **CU under budget:** `cu-bench` (bench build) asserts `VerifyMembership < 200k` (measured **98,627**); `flow` asserts `execute_action < 200k` (measured ~108–116k). Far under the 1.4M cap.
 - **Explicit CU request:** the relayer prepends `ComputeBudgetInstruction::set_compute_unit_limit`; `flow`/`cu-bench` too.
 - **Tx size:** proof (256) + 4 public inputs (128) + accounts fit; all txs land.
 - **Deploys and runs on a real validator:** the `--arch v3` artifact was deployed to a local `solana-test-validator` (real Agave 4.1.1) and the **full flow ran against the deployed program id over RPC** via the CLI — `init-pool`, `deposit`×2, `crank open`, and a relayer-paid `execute` (on-chain proof verification + PDA-signed CPI), each a confirmed transaction.
-- **Live devnet:** **deferred** — the devnet CLI faucet was rate-limited during this work (both 2 SOL and 1 SOL refused). To finish: fund the address from `solana address` via a web faucet, then `solana program deploy … --url devnet` and re-run the CLI commands with `--url devnet`. The artifact and commands are identical to the validated localnet run.
+- **Live devnet:** **deployed** — program id `4YrUSMP2gG9v9SJAgQPNYpzvUSxqWVBBQwdc7g52xYPe` ([explorer](https://explorer.solana.com/address/4YrUSMP2gG9v9SJAgQPNYpzvUSxqWVBBQwdc7g52xYPe?cluster=devnet)). The `--arch v3` artifact and CLI flow are identical to the validated localnet run. See [`deployment.md`](./deployment.md).
 
 ## Level 5 — Robustness / abuse resistance ✅
 
@@ -77,8 +82,8 @@ attacks the public trace:
 | Benchmark instruction removed from deployed artifact | ✅ | `#[cfg(feature="bench")]`; `verify_membership_absent_from_default_build` |
 | On-chain minimum anonymity set (`k_min`) | ✅ | `flow` reject@1<2 / accept@2≥2; metric + limits in ARCHITECTURE |
 | Amount privacy (denominations) | ✅ | `TransferAction` `DENOMINATIONS`; `flow` `Custom(26)` |
-| Trusted-setup reproducibility | ✅ | committed `setup/verifying_key.solana.bin`; `circuit` `setup_reproducible` |
-| Devnet deploy | ⚠ deferred | localnet real-validator deploy + RPC e2e done; devnet pending faucet funding |
+| Trusted setup — multi-contributor Phase-2 ceremony | ✅ | `circuit::ceremony` MPC; `circuit` `trusted_setup` verifies the chain, pins the transcript hash, confirms committed VK; `ceremony_key_still_proves_and_verifies` |
+| Devnet deploy | ✅ | live program id `4YrUSMP2gG9v9SJAgQPNYpzvUSxqWVBBQwdc7g52xYPe` on devnet; localnet real-validator deploy + RPC e2e |
 
 ## Addendum v2 — research-grounded anonymity + compliance
 
@@ -106,13 +111,15 @@ Superteam BR's `auditor-skill` was **not available** in this environment. Two
 independent structured reviews were run instead (documented as self-review, not
 a third-party audit) — a base-protocol review and a hardening review. Neither
 found a high-confidence exploitable vulnerability. Findings, resolutions, and the
-inherent `k_min`/Sybil limitation are recorded in [`SECURITY.md`](./SECURITY.md).
+inherent `k_min`/Sybil limitation are recorded in [`security.md`](./security.md).
 
 ## Honesty gate ✅
 
-`README.md`, `ARCHITECTURE.md`, and `SECURITY.md` state plainly: no third-party
-audit, no formal circuit verification, a **dev-only** trusted setup (with the
-production ceremony path written out), the fee-payer/timing/amount/single-window
-residual leakage, and — critically — that `k_min` does **not** guarantee honest
-anonymity against a Sybil adversary. No privacy claim exceeds what Level 3 plus
-the enforced on-chain invariant demonstrate.
+`README.md`, `ARCHITECTURE.md`, and [`docs/security.md`](./security.md) state
+plainly: no third-party audit, no formal circuit verification, a
+**single-operator** multi-contributor Phase-2 ceremony with no external Phase-1
+(secure if ≥1 contributor was honest, but run on one machine — testnet-grade),
+the fee-payer/timing/amount/single-window residual leakage, and — critically —
+that `k_min` does **not** guarantee honest anonymity against a Sybil adversary.
+No privacy claim exceeds what Level 3 plus the enforced on-chain invariant
+demonstrate.

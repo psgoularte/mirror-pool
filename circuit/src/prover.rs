@@ -123,7 +123,7 @@ pub fn setup<R: RngCore + CryptoRng>(
 
 // The former fixed-seed `dev_setup` (a single-party, public-seed setup) has been
 // removed: it was forgeable by anyone. Keys now come from the multi-contributor
-// Phase-2 ceremony in `crate::ceremony` (see `SECURITY.md`). Tests use `setup`
+// Phase-2 ceremony in `crate::ceremony` (see `docs/security.md`). Tests use `setup`
 // with a seeded RNG directly for a fast, throwaway key.
 
 /// Generate a proof for a fully-assigned circuit.

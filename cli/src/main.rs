@@ -295,7 +295,7 @@ fn cmd_setup(out_dir: &Path, contributions: usize) -> Result<()> {
     println!(
         "⚠  This ran all contributions on ONE machine, so it is only as honest as \
          this operator. A real deployment coordinates contributions across \
-         INDEPENDENT parties (and adds a public Phase-1). See SECURITY.md."
+         INDEPENDENT parties (and adds a public Phase-1). See docs/security.md."
     );
     Ok(())
 }

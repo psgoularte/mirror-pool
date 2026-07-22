@@ -6,12 +6,14 @@ protocol. Read this document before deploying anything you care about.
 > **Top-line caveats**
 > 1. **No third-party audit** and **no formal circuit verification** have been
 >    performed.
-> 2. The shipped verifying key is a **development** key from a single-party,
->    public-seed setup — **not production-trusted**. Anyone can forge proofs
->    against it. See [Trusted setup](#trusted-setup).
+> 2. The shipped key comes from a **multi-contributor Phase-2 ceremony** whose
+>    contributions were all run on **one machine** — secure if that single
+>    operator was honest, plus a base (Phase-1) that rests on the same operator.
+>    Suitable for review/testnets, **not** for securing real value. See
+>    [Trusted setup](#trusted-setup).
 > 3. Privacy is **probabilistic and behavioral**, and depends on operational
 >    conditions (busy epochs, a trusted relayer). See the
->    [threat model](./ARCHITECTURE.md#threat-model-milestone-8).
+>    [threat model](../ARCHITECTURE.md#threat-model).
 
 ## Trusted setup
 
@@ -19,43 +21,46 @@ Groth16 needs a per-circuit trusted setup. The setup's secret randomness ("toxic
 waste") must be destroyed; whoever retains it can forge membership proofs for the
 pool (a **soundness** break — it does not by itself break privacy).
 
-### What ships today (development)
+### What ships (multi-contributor Phase-2)
 
-`mirror_pool_circuit::prover::dev_setup()` runs arkworks' `circuit_specific_setup`
-with a **fixed, public seed** (`DEV_SETUP_SEED`). This is deterministic on
-purpose so the committed key (`setup/verifying_key.solana.bin`) is regenerable
-and diffable in CI (`circuit`'s `setup_reproducible` test). Because the seed is
-public, **this key is forgeable by anyone** and must never secure real value.
+`circuit::ceremony` implements a real **multi-contributor Phase-2 MPC**. Each
+contributor re-randomizes the `delta` trapdoor with fresh, non-deterministic
+entropy (`delta_g1,g2 *= s`; the `delta`-divided `l_query`/`h_query` `*= s⁻¹`)
+and publishes a Schnorr proof-of-contribution; a pairing same-ratio check binds
+the `g1`/`g2` updates to one `s`. The composed key is secure **if at least one
+contributor discarded their randomness** — the real Groth16 assurance, replacing
+the earlier forgeable public-seed dev key.
 
-### Why not a real Phase-1 powers-of-tau here
+The committed ceremony lives in `setup/` (verifying key + `transcript/`).
+`circuit/tests/trusted_setup.rs` **verifies the whole contribution chain**, pins
+the transcript by SHA-256, and confirms the committed on-chain VK is the
+ceremony output. Correctness of the `delta` update is gated by a full prove+
+verify with the multi-contributed key
+(`ceremony::tests::ceremony_key_still_proves_and_verifies`).
 
-The Rust/arkworks-only stack does not consume an external `.ptau` (perpetual
-powers-of-tau) file: arkworks' Groth16 `circuit_specific_setup`/
-`generate_parameters` sample all setup scalars internally from the provided RNG
-rather than ingesting a Phase-1 transcript (that ingestion path is the
-snarkjs/circom toolchain, which this project deliberately does not use). Reusing
-a public Phase-1 would require either a snarkjs-compatible export of this circuit
-or an arkworks-native MPC implementation. We do **not** fake this: the honest
-status is a single-party dev setup, and the production path below is the required
-work, not something already done.
+### What it does NOT yet cover
 
-### Production ceremony path (required before mainnet)
+- **Single-operator contributions.** The shipped ceremony's contributions were
+  all run on one machine (via `cli setup`), so it is only as honest as that one
+  operator. A production ceremony coordinates contributions across **independent**
+  parties, each publishing their contribution for public verification.
+- **Phase-2 only.** The ceremony re-randomizes `delta`; `alpha, beta, gamma, tau`
+  come from the base arkworks setup and rest on that base's entropy being
+  discarded. The arkworks stack does **not** ingest an external `.ptau`, so a
+  universal public **Phase-1** powers-of-tau is not wired in — that remains the
+  production requirement. We do not fake it.
 
-1. **Phase 1 (universal).** Start from a well-known public powers-of-tau
-   transcript (e.g. the Perpetual Powers of Tau) sized for the circuit's
-   constraint count, with published, independently-verified contributions.
-2. **Phase 2 (circuit-specific).** Run a multi-party computation over *this*
-   circuit where each contributor injects fresh entropy and publishes a
-   contribution + proof-of-contribution; the final key is secure if **at least
-   one** contributor was honest and discarded their randomness.
-3. **Transcript & verification.** Publish every contribution and the final
-   transcript; have independent parties verify the chain end-to-end.
-4. **Pin the result.** Replace `setup/verifying_key.solana.bin` with the
-   ceremony output, record the transcript hash here, and re-run
-   `setup_reproducible` is **not** expected to pass afterward (the dev seed no
-   longer reproduces it) — update that test to pin the ceremony key by hash.
+### Production ceremony path (before mainnet)
 
-Until that is done, treat every pool as a demo.
+1. **Phase 1 (universal).** Start from a public powers-of-tau transcript (e.g.
+   the Perpetual Powers of Tau), published and independently verified.
+2. **Phase 2 (this circuit).** Run the `circuit::ceremony` contributions across
+   **independent** machines/parties, each publishing their contribution.
+3. **Verify + pin.** Publish the transcript; independent parties run
+   `trusted_setup` to verify the chain; pin the transcript hash in that test.
+
+Until independent multi-party contributions and a public Phase-1 are in place,
+treat every pool as a testnet demo.
 
 ## Threat model
 
@@ -63,7 +68,7 @@ The full, honest deanonymization analysis — fee-payer linkage, single-action
 windows, cross-epoch timing, amount/dust correlation, small pools, network-level
 deanonymization, a malicious relayer, and a compromised setup — with mitigations
 and residual leakage, lives in
-[`ARCHITECTURE.md`](./ARCHITECTURE.md#threat-model-milestone-8). The one-line
+[`ARCHITECTURE.md`](../ARCHITECTURE.md#threat-model). The one-line
 summary: *mirror-pool hides which member acted, as strongly as the pool is large
 and the epoch window is busy, provided a trusted relayer pays the fee.*
 

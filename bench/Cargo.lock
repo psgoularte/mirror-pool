@@ -1527,6 +1527,7 @@ dependencies = [
  "light-poseidon 0.4.0",
  "mirror-pool-common",
  "rand 0.8.7",
+ "sha2 0.10.9",
  "thiserror 1.0.69",
 ]
 

@@ -378,7 +378,7 @@ equilibrium**: honest users can prove clean provenance, illicit ones cannot.
   the honest **off-chain reference** (`SanctionedSet::exclusion_witness`: a
   sorted-set adjacency witness, verified natively) that an ASP uses to attest
   exclusion. This is explicitly **not** a zero-knowledge on-chain proof; the ZK
-  circuit is documented as the next step in `SECURITY.md`.
+  circuit is documented as the next step in [`docs/security.md`](./docs/security.md).
 
 **This is the precondition for the anonymity metric.** effective-k is reported
 over the **associated** set; the gap to effective-k over all deposits is the
@@ -397,7 +397,7 @@ that in the program — on-chain enforcement (a second bound Groth16 verify, ~2�
 the CU, with a `nullifier_hash`-match to the action proof) is a **design note**,
 not implemented. The off-chain ASP flow is what ships.
 
-## Threat model (milestone 8)
+## Threat model
 
 mirror-pool provides **probabilistic, behavioral** anonymity. Your anonymity set
 for an action is the set of pool members who could plausibly have produced it —

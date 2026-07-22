@@ -17,11 +17,23 @@ generalized from "the right to withdraw funds" to "the right to trigger an
 action this epoch." **The PDA — not the member — is the on-chain actor**, and
 that indirection is the core unlinkability primitive.
 
-> **Status:** all eight milestones complete — membership circuit, on-chain
-> Groth16 verification (~98k CU), incremental tree + deposits, nullifiers +
-> `execute_action`, epochs, fee-paying relayer, a real integration, and the
-> compliance layer. See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the design and
-> threat model, and run [`./demo.sh`](./demo.sh) for the full flow on a local SVM.
+> **Status:** feature-complete and **live on devnet** — membership circuit,
+> on-chain Groth16 verification (~98k CU), incremental tree + deposits,
+> nullifiers + `execute_action`, epochs, fee-paying relayer, a real integration,
+> the compliance layer, and a multi-contributor Phase-2 trusted-setup ceremony.
+> Run [`./demo.sh`](./demo.sh) for the full flow on a local SVM.
+
+## Documentation
+
+| Doc | What's in it |
+|-----|--------------|
+| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | System design, component walk-through, and the full threat model |
+| [`docs/security.md`](./docs/security.md) | Trusted setup, limitations, self-review findings, disclosure |
+| [`docs/anonymity.md`](./docs/anonymity.md) | Min-entropy effective-k metric, adversary models, the Sybil gap |
+| [`docs/compliance.md`](./docs/compliance.md) | Association sets, ZK inclusion, viewing keys, screening |
+| [`docs/circuit.md`](./docs/circuit.md) | Membership statement, Poseidon invariant, Phase-2 ceremony |
+| [`docs/deployment.md`](./docs/deployment.md) | Live devnet id, `--arch v3` build, RPC flow, local iteration |
+| [`docs/testing.md`](./docs/testing.md) | Acceptance checklist mapped to concrete tests/binaries |
 
 ## How it works
 
@@ -73,10 +85,11 @@ Stated as facts about this design, not comparisons:
   anonymity metric is reported over the attested set.
 - **Grounded anonymity metric** — min-entropy effective-k over the association
   set (not a naive count), derived from the primary literature and honest about
-  the Sybil gap (see [`ARCHITECTURE.md`](./ARCHITECTURE.md#references)).
-- **Runs on a real validator** — deploys with `--arch v3` and the full flow runs
-  against the deployed program over RPC (validated on a local Agave validator;
-  live devnet pending faucet funding — see below).
+  the Sybil gap (see [`docs/anonymity.md`](./docs/anonymity.md)).
+- **Live on devnet** — deploys with `--arch v3` and the full flow runs against
+  the deployed program over RPC. Program id
+  [`4YrUSMP2gG9v9SJAgQPNYpzvUSxqWVBBQwdc7g52xYPe`](https://explorer.solana.com/address/4YrUSMP2gG9v9SJAgQPNYpzvUSxqWVBBQwdc7g52xYPe?cluster=devnet)
+  (and validated on a local Agave validator). See [`docs/deployment.md`](./docs/deployment.md).
 
 ## Threat model (summary)
 
@@ -158,8 +171,10 @@ compliance layer, and shows the CLI.
 cargo build -p mirror-pool-cli
 BIN=target/debug/mirror-pool
 
-# One-time dev trusted setup (writes proving/verifying keys + on-chain VK bytes).
-$BIN setup --out-dir artifacts
+# Trusted setup: a multi-contributor Phase-2 ceremony (writes proving/verifying
+# keys + on-chain VK bytes + a transcript). Each contribution injects fresh
+# entropy; the key is secure if ≥1 contributor was honest.
+$BIN setup --out-dir artifacts --contributions 3
 
 # A member generates a secret and deposits its commitment.
 $BIN keygen                       # -> secret + commitment
@@ -201,14 +216,13 @@ $BIN prove     --proving-key artifacts/proving_key.bin --leaves leaves.txt --sec
 $BIN execute   --program-id $PID --keypair <relayer.json> --pool-authority <AUTH> --job action.job
 ```
 
-**Deployment status.** This exact sequence has been run end-to-end against a
-local `solana-test-validator` (a real Agave 4.1.1 validator): the deployed
-program initialized a pool, accepted deposits, opened an epoch, and executed a
+**Deployment status.** mirror-pool is **live on devnet** at program id
+[`4YrUSMP2gG9v9SJAgQPNYpzvUSxqWVBBQwdc7g52xYPe`](https://explorer.solana.com/address/4YrUSMP2gG9v9SJAgQPNYpzvUSxqWVBBQwdc7g52xYPe?cluster=devnet).
+The same sequence was also validated end-to-end against a local
+`solana-test-validator` (a real Agave 4.1.1 validator): the deployed program
+initialized a pool, accepted deposits, opened an epoch, and executed a
 relayer-paid `execute_action` (on-chain proof verification + PDA-signed CPI).
-**Live devnet is deferred**: the devnet CLI faucet was rate-limited during this
-work, so the deployed devnet Program Id is pending funding — fund the address
-printed by `solana address` (web faucet) and re-run the two commands above with
-`--url devnet`. See [`VALIDATION-RESULTS.md`](./VALIDATION-RESULTS.md) L4.
+Full record in [`docs/deployment.md`](./docs/deployment.md).
 
 ## Instruction error codes
 
@@ -260,12 +274,15 @@ rewrite. Full guide in
 
 ## Security & assurance
 
-mirror-pool is **unaudited**, uses a **dev-only trusted setup**, and provides
-**probabilistic** privacy. Read [`SECURITY.md`](./SECURITY.md) before deploying
-anything of value — it covers the trusted-setup ceremony path, the threat model,
-and the review findings. In particular, `k_min` bounds *program-visible*
-membership, **not** honest anonymity against a Sybil adversary (enable the
-screening hook or staked deposits for real use).
+mirror-pool is **unaudited** and provides **probabilistic** privacy. Its
+verifying key comes from a **multi-contributor Phase-2 ceremony** that was run
+**single-operator** with no external Phase-1 — secure if ≥1 contributor was
+honest, but treat every pool as testnet-grade. Read
+[`docs/security.md`](./docs/security.md) before deploying anything of value — it
+covers the trusted-setup ceremony, the threat model, and the review findings. In
+particular, `k_min` bounds *program-visible* membership, **not** honest
+anonymity against a Sybil adversary (enable the screening hook or staked deposits
+for real use).
 
 ## Reproducible builds
 

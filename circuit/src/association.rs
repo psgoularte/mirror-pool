@@ -181,7 +181,7 @@ impl SanctionedSet {
     ///
     /// This is the off-chain reference an ASP uses to attest exclusion. It is
     /// NOT zero-knowledge — the ZK on-chain version (a sorted-tree adjacency
-    /// circuit) is documented as future work in `ARCHITECTURE.md`/`SECURITY.md`.
+    /// circuit) is documented as future work in `ARCHITECTURE.md`/`docs/security.md`.
     pub fn exclusion_witness(&self, c: &[u8; 32]) -> Option<ExclusionWitness> {
         match self.sorted.binary_search(c) {
             Ok(_) => None, // sanctioned → cannot prove exclusion

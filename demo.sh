@@ -62,5 +62,5 @@ printf '%s\n%s\n' "$C" "$OTHER" > "$WORK/assoc-set.txt"
 "$BIN" associate --proving-key "$WORK/keys/proving_key.bin" --set "$WORK/assoc-set.txt" --secret "$S" --epoch 1
 
 echo
-echo "==> demo complete. See ARCHITECTURE.md for the threat model and SECURITY.md"
-echo "    for the trusted-setup ceremony path and review findings."
+echo "==> demo complete. See ARCHITECTURE.md for the threat model and"
+echo "    docs/security.md for the trusted-setup ceremony and review findings."

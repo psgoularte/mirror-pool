@@ -38,6 +38,7 @@
 //!      candidates, so `max pᵢ = 1/(k − m)` and
 //!      `dominance_adjusted_effective_k = k − m`. This is the honest worst case
 //!      and the reason a Sybil-dominated bucket collapses.
+//!
 //!    (Sweeney, *k-anonymity*, 2002; Machanavajjhala et al., *l-diversity*,
 //!    2007; Li, Li & Venkatasubramanian, *t-closeness*, ICDE 2007.)
 //!

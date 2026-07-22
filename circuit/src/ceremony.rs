@@ -28,8 +28,8 @@
 //! **Honest scope.** This project's base is a single arkworks setup, so
 //! `alpha, beta, gamma, tau` rest on that base's entropy being discarded; only
 //! `delta` gets the multi-party guarantee. A production deployment adds a public
-//! Phase-1 transcript so nothing rests on a single party. `SECURITY.md` states
-//! this plainly.
+//! Phase-1 transcript so nothing rests on a single party. `docs/security.md`
+//! states this plainly.
 
 // NOTE: do not `use crate::error::Result` here — the `CanonicalSerialize`
 // derive macro emits bare `Result<(), _>` which must resolve to `std`'s 2-arg
