@@ -1,45 +1,53 @@
-# setup/ — Groth16 trusted setup
+# setup/ — Groth16 trusted setup (multi-contributor Phase-2)
 
-Groth16 requires a **per-circuit trusted setup**. The setup produces a proving
-key and a verifying key from secret randomness ("toxic waste"); anyone who
-retains that randomness can forge membership proofs. This directory holds the
-**development** verifying key and documents how a **production** key must be
-produced.
+Groth16 needs a per-circuit setup whose secret randomness ("toxic waste") must
+be destroyed. A **single-party** setup is only as trustworthy as that one party.
+mirror-pool uses a **multi-contributor Phase-2 ceremony** (`circuit::ceremony`):
+each contributor re-randomizes the `delta` trapdoor with fresh entropy and
+publishes a proof-of-contribution. The key is secure **if at least one
+contributor discarded their randomness**.
 
-## What is committed here
+## Committed artifacts (a real, verifiable ceremony)
 
-- `verifying_key.solana.bin` — the on-chain verifying key (769 bytes, the flat
-  layout `program::verifier::ParsedVerifyingKey` parses), for the **dev** setup.
+- `verifying_key.bin` — the arkworks verifying key (the ceremony output).
+- `verifying_key.solana.bin` — the same key in the on-chain byte layout (769 B).
+- `transcript/transcript.bin` — the base `delta` + every contribution with its
+  Schnorr proof-of-contribution and same-ratio consistency.
 
-This key is produced by `mirror_pool_circuit::prover::dev_setup()`, a
-**deterministic, single-party** setup seeded from a public constant
-(`DEV_SETUP_SEED`). It is reproducible on purpose so it can be regenerated and
-diffed in CI:
+These come from one real 3-contribution ceremony. **The proving key is not
+committed** (it is large; each operator generates their own — see below). The
+committed key is a verifiable *reference*, not the key you deploy with.
 
-```sh
-# Verify the committed key is reproducible (runs in CI):
-cargo test -p mirror-pool-circuit --test setup_reproducible
-
-# Regenerate it (only if the circuit legitimately changed):
-cargo test -p mirror-pool-circuit --test setup_reproducible -- --ignored write_dev_vk
-```
-
-The CLI writes the same key set (`proving_key.bin`, `verifying_key.bin`,
-`vk_solana.bin`) with:
+## Verify the ceremony
 
 ```sh
-cargo run -p mirror-pool-cli -- setup --out-dir setup
+cargo test -p mirror-pool-circuit --test trusted_setup
 ```
 
-## ⚠ This dev key is NOT production-trusted
+This (1) verifies the whole contribution chain, (2) checks the transcript
+matches the hash pinned in the test, and (3) confirms `verifying_key.solana.bin`
+is exactly the transcript's output. Verification is fully public.
 
-Because the seed is public, anyone can reconstruct the toxic waste and forge
-proofs. **Do not deploy a pool whose value you care about with this key.**
+## Run your own ceremony
 
-## Producing a production key (Phase-2 ceremony)
+```sh
+cargo run -p mirror-pool-cli -- setup --out-dir my-setup --contributions 3
+```
 
-The full ceremony path — Phase-1 powers-of-tau reuse, the multi-party Phase-2
-protocol, contribution transcripts, and verification — is documented in
-[`../SECURITY.md`](../SECURITY.md#trusted-setup). In short: never trust a setup
-run by a single party; run a multi-contributor ceremony, publish the transcript,
-and have independent parties verify it before committing the resulting key here.
+Writes `proving_key.bin`, `verifying_key.bin`, `vk_solana.bin`, and
+`transcript.bin`. Use `vk_solana.bin` for `init-pool --verifying-key` and
+`proving_key.bin` for `prove` / `associate`.
+
+## ⚠ Honest scope
+
+- **This CLI runs all contributions on one machine**, so it is only as honest as
+  that single operator. A real deployment coordinates contributions across
+  **independent** parties, each on their own machine, publishing the transcript
+  for public verification.
+- **Phase-2 only.** The ceremony re-randomizes `delta`; `alpha, beta, gamma, tau`
+  come from the base setup, which rests on that base's entropy being discarded.
+  A production deployment adds a public **Phase-1** powers-of-tau (the arkworks
+  stack does not ingest an external `.ptau`; this is noted in `docs/security.md`).
+
+The committed key is therefore suitable for review and testnets, not for
+securing real value with a single-operator base.

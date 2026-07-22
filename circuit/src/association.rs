@@ -211,13 +211,21 @@ pub fn verify_exclusion_witness(c: &[u8; 32], witness: &ExclusionWitness) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prover::dev_setup;
     use ark_std::rand::rngs::StdRng;
     use ark_std::rand::SeedableRng;
 
+    // Fast, throwaway test key (a seeded single setup — NOT the shipped ceremony
+    // key). Only used to exercise the inclusion-proof logic.
+    fn test_keys() -> (
+        ark_groth16::ProvingKey<Bn254>,
+        ark_groth16::VerifyingKey<Bn254>,
+    ) {
+        crate::prover::setup(TREE_DEPTH, &mut StdRng::seed_from_u64(0xA55E7)).unwrap()
+    }
+
     #[test]
     fn included_member_proves_inclusion_others_cannot() {
-        let (pk, vk) = dev_setup().unwrap();
+        let (pk, vk) = test_keys();
         let mut set = AssociationSet::new();
         let members: Vec<Fr> = (1..=5u64).map(Fr::from).collect();
         for m in &members {
@@ -238,7 +246,7 @@ mod tests {
 
     #[test]
     fn inclusion_proof_rejected_against_wrong_root() {
-        let (pk, vk) = dev_setup().unwrap();
+        let (pk, vk) = test_keys();
         let mut set = AssociationSet::new();
         set.approve(Fr::from(1u64)).unwrap();
         set.approve(Fr::from(2u64)).unwrap();

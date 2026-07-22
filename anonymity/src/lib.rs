@@ -29,11 +29,17 @@
 //!    `denomination × action-type`; you are only anonymous *within* your bucket.
 //!    We report the **worst-case effective-k across buckets**, never a pooled
 //!    figure that hides a thin bucket.
-//! 3. **Dominance / homogeneity.** A bucket of nominal size `k` in which one
-//!    funder controls `m` notes has effective anonymity `≈ k − m` against a
-//!    colluding-funder adversary (Sweeney, *k-anonymity*, 2002;
-//!    Machanavajjhala et al., *l-diversity*, 2007; Li, Li & Venkatasubramanian,
-//!    *t-closeness*, ICDE 2007).
+//! 3. **Dominance / homogeneity — and which adversary.** Two adversaries give
+//!    two figures, both reported:
+//!    * **External** adversary (no note ownership): every candidate is equally
+//!      likely, `max pᵢ = 1/k`, so `uniform_effective_k = k`.
+//!    * **Dominant-funder** adversary: the single largest funder, who *knows its
+//!      own `m` notes are not the honest target*, is left with `k − m`
+//!      candidates, so `max pᵢ = 1/(k − m)` and
+//!      `dominance_adjusted_effective_k = k − m`. This is the honest worst case
+//!      and the reason a Sybil-dominated bucket collapses.
+//!    (Sweeney, *k-anonymity*, 2002; Machanavajjhala et al., *l-diversity*,
+//!    2007; Li, Li & Venkatasubramanian, *t-closeness*, ICDE 2007.)
 //!
 //! Pure Rust, no Solana/arkworks dependencies.
 
@@ -85,12 +91,13 @@ pub struct BucketReport {
     pub bucket: Bucket,
     /// Number of candidate notes in the bucket (nominal set size).
     pub nominal_k: usize,
-    /// Uniform-adversary min-entropy effective-k (equals `nominal_k` when the
-    /// observer has no side information: every candidate is equally likely).
+    /// **External-adversary** min-entropy effective-k: no note ownership, every
+    /// candidate equally likely, so `max pᵢ = 1/k` and this equals `nominal_k`.
     pub uniform_effective_k: f64,
-    /// Effective-k against the worst-case **colluding-funder** adversary: the
-    /// largest single funder is assumed to be the attacker and excludes its own
-    /// notes, leaving `nominal_k − max_funder_notes` honest candidates.
+    /// **Dominant-funder-adversary** effective-k: the largest single funder
+    /// knows its own `m` notes are not the honest target, leaving
+    /// `nominal_k − max_funder_notes` candidates (`max pᵢ = 1/(k−m)`). The
+    /// honest worst case.
     pub dominance_adjusted_effective_k: f64,
     /// Share of the bucket controlled by its largest funder (0.0–1.0).
     pub top_funder_share: f64,

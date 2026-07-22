@@ -1,9 +1,9 @@
 //! `mirror-pool` developer CLI (SPEC §4.5).
 //!
 //! Subcommands:
-//! * `setup`     — deterministic (dev) Groth16 setup; writes proving/verifying keys.
+//! * `setup`     — multi-contributor Phase-2 Groth16 ceremony; writes keys + transcript.
 //! * `keygen`    — generate a member secret, or an auditor viewing keypair.
-//! * `init-pool` — create a pool on-chain (signer = authority; uses the dev VK).
+//! * `init-pool` — create a pool on-chain (signer = authority; VK from `setup`).
 //! * `deposit`   — submit a commitment to a pool (on-chain).
 //! * `crank`     — open/close the epoch window (authority only, on-chain).
 //! * `prove`     — build a membership proof and write a relay job.
@@ -20,7 +20,8 @@ use ark_bn254::Fr;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use clap::{Parser, Subcommand};
-use mirror_pool_circuit::prover::{build_witness, dev_setup, prove, PublicInputs};
+use mirror_pool_circuit::ceremony::run_ceremony;
+use mirror_pool_circuit::prover::{build_witness, prove, PublicInputs};
 use mirror_pool_circuit::solana::{proof_to_solana, vk_to_solana};
 use mirror_pool_common::compliance::{seal_disclosure, ViewingKeypair};
 use mirror_pool_common::merkle::MerkleTree;
@@ -48,11 +49,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Dev Groth16 trusted setup. Writes proving_key.bin, verifying_key.bin, and
-    /// vk_solana.bin (the on-chain VK bytes for `initialize_pool`).
+    /// Run a multi-contributor Phase-2 Groth16 ceremony. Writes proving_key.bin,
+    /// verifying_key.bin, vk_solana.bin, and the transcript.bin.
     Setup {
         #[arg(long, default_value = "artifacts")]
         out_dir: PathBuf,
+        /// Number of Phase-2 contributions (≥ 1). Real deployments coordinate
+        /// these across independent parties.
+        #[arg(long, default_value_t = 3)]
+        contributions: usize,
     },
     /// Generate a member secret, or (with --auditor) a viewing keypair.
     Keygen {
@@ -83,6 +88,9 @@ enum Command {
     /// Privacy-Pools inclusion proof. Reuses the membership circuit against the
     /// set's root; self-verifies. Guarantees association-set membership only.
     Associate {
+        /// Ceremony proving key (`proving_key.bin` from `setup`).
+        #[arg(long)]
+        proving_key: PathBuf,
         /// File of approved commitment hexes (one per line) — the association set.
         #[arg(long)]
         set: PathBuf,
@@ -124,6 +132,9 @@ enum Command {
         keypair: PathBuf,
         #[arg(long)]
         program_id: String,
+        /// On-chain verifying key (`vk_solana.bin` from `setup`).
+        #[arg(long)]
+        verifying_key: PathBuf,
         #[arg(long, default_value_t = 2)]
         k_min: u64,
     },
@@ -174,7 +185,10 @@ fn parse_fr(hex_str: &str) -> Result<Fr> {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
-        Command::Setup { out_dir } => cmd_setup(&out_dir),
+        Command::Setup {
+            out_dir,
+            contributions,
+        } => cmd_setup(&out_dir, contributions),
         Command::Keygen { auditor } => cmd_keygen(auditor),
         Command::Prove {
             proving_key,
@@ -193,7 +207,12 @@ fn main() -> Result<()> {
             &params,
             &out,
         ),
-        Command::Associate { set, secret, epoch } => cmd_associate(&set, &secret, epoch),
+        Command::Associate {
+            proving_key,
+            set,
+            secret,
+            epoch,
+        } => cmd_associate(&proving_key, &set, &secret, epoch),
         Command::Disclose {
             secret,
             auditor_pubkey,
@@ -208,8 +227,9 @@ fn main() -> Result<()> {
             rpc_url,
             keypair,
             program_id,
+            verifying_key,
             k_min,
-        } => cmd_init_pool(&rpc_url, &keypair, &program_id, k_min),
+        } => cmd_init_pool(&rpc_url, &keypair, &program_id, &verifying_key, k_min),
         Command::Crank {
             rpc_url,
             keypair,
@@ -239,12 +259,16 @@ fn main() -> Result<()> {
     }
 }
 
-fn cmd_setup(out_dir: &Path) -> Result<()> {
+fn cmd_setup(out_dir: &Path, contributions: usize) -> Result<()> {
     std::fs::create_dir_all(out_dir).context("create out dir")?;
-    eprintln!("running the deterministic DEV Groth16 setup (depth {TREE_DEPTH})…");
-    // Deterministic, fixed-seed DEV setup: reproduces the committed
-    // `setup/verifying_key.solana.bin`. NOT production-trusted.
-    let (pk, vk) = dev_setup().map_err(|e| anyhow!("setup: {e}"))?;
+    eprintln!(
+        "running a {contributions}-contribution Phase-2 ceremony (depth {TREE_DEPTH}) with OS entropy…"
+    );
+    // Real multi-contributor Phase-2 with fresh entropy. Secure if ≥1
+    // contribution's randomness was discarded.
+    let mut rng = OsRng;
+    let (pk, vk, transcript) =
+        run_ceremony(contributions, &mut rng).map_err(|e| anyhow!("ceremony: {e}"))?;
 
     let mut pk_bytes = Vec::new();
     pk.serialize_compressed(&mut pk_bytes)
@@ -255,16 +279,23 @@ fn cmd_setup(out_dir: &Path) -> Result<()> {
     vk.serialize_compressed(&mut vk_bytes)
         .map_err(|e| anyhow!("serialize vk: {e}"))?;
     std::fs::write(out_dir.join("verifying_key.bin"), &vk_bytes)?;
-
     std::fs::write(out_dir.join("vk_solana.bin"), vk_to_solana(&vk).to_bytes())?;
+    std::fs::write(
+        out_dir.join("transcript.bin"),
+        transcript
+            .to_bytes()
+            .map_err(|e| anyhow!("transcript: {e}"))?,
+    )?;
+
     println!(
-        "wrote proving_key.bin, verifying_key.bin, vk_solana.bin to {}",
+        "wrote proving_key.bin, verifying_key.bin, vk_solana.bin, transcript.bin to {}",
         out_dir.display()
     );
+    println!("transcript hash: {}", hex::encode(transcript.hash()));
     println!(
-        "⚠  DEV setup only — seeded from a public constant, so whoever runs it \
-         can forge proofs. Production keys MUST come from a multi-party ceremony \
-         (see SECURITY.md)."
+        "⚠  This ran all contributions on ONE machine, so it is only as honest as \
+         this operator. A real deployment coordinates contributions across \
+         INDEPENDENT parties (and adds a public Phase-1). See SECURITY.md."
     );
     Ok(())
 }
@@ -355,7 +386,9 @@ fn cmd_prove(
     Ok(())
 }
 
-fn cmd_associate(set_path: &Path, secret_hex: &str, epoch: u64) -> Result<()> {
+fn cmd_associate(proving_key: &Path, set_path: &Path, secret_hex: &str, epoch: u64) -> Result<()> {
+    use ark_bn254::Bn254;
+    use ark_groth16::ProvingKey;
     use mirror_pool_circuit::association::{prove_inclusion, verify_inclusion, AssociationSet};
     let secret = parse_fr(secret_hex)?;
     // Build the association set from approved commitment hexes.
@@ -372,8 +405,12 @@ fn cmd_associate(set_path: &Path, secret_hex: &str, epoch: u64) -> Result<()> {
             .map_err(|e| anyhow!("add to set: {e}"))?;
     }
     let root = set.root();
-    // Dev keys (deterministic).
-    let (pk, vk) = dev_setup().map_err(|e| anyhow!("setup: {e}"))?;
+    // Load the ceremony proving key (produced by `mirror-pool setup`); its
+    // embedded verifying key is used for the self-check.
+    let pk_bytes = std::fs::read(proving_key).context("read proving key")?;
+    let pk: ProvingKey<Bn254> = CanonicalDeserialize::deserialize_compressed(&pk_bytes[..])
+        .map_err(|e| anyhow!("deserialize pk: {e}"))?;
+    let vk = pk.vk.clone();
     let mut rng = OsRng;
     let incl = prove_inclusion(&pk, &set, secret, Fr::from(epoch), &mut rng)
         .map_err(|e| anyhow!("inclusion proof: {e} (is the commitment in the set?)"))?;
@@ -500,19 +537,31 @@ fn rpc_and_pool(
     Ok((rpc, program_id, pool))
 }
 
-fn cmd_init_pool(rpc_url: &str, keypair: &Path, program_id: &str, k_min: u64) -> Result<()> {
+fn cmd_init_pool(
+    rpc_url: &str,
+    keypair: &Path,
+    program_id: &str,
+    verifying_key: &Path,
+    k_min: u64,
+) -> Result<()> {
     let rpc = RpcClient::new_with_commitment(rpc_url.to_string(), CommitmentConfig::confirmed());
     let program_id = Pubkey::from_str(program_id).context("program id")?;
     let payer = read_keypair_file(keypair).map_err(|e| anyhow!("read keypair: {e}"))?;
     // The signer is the pool authority.
     let pool = pool_pda(&program_id, &payer.pubkey());
 
-    // Dev verifying key (deterministic; reproduces setup/verifying_key.solana.bin).
-    let (_pk, vk) = dev_setup().map_err(|e| anyhow!("setup: {e}"))?;
-    let vk_bytes: [u8; mirror_pool_program::verifier::VK_SERIALIZED_LEN] = vk_to_solana(&vk)
-        .to_bytes()
-        .try_into()
-        .map_err(|_| anyhow!("vk length"))?;
+    // On-chain verifying key: the `vk_solana.bin` produced by `setup` (the
+    // ceremony output). Loaded from a file — not hardcoded.
+    let vk_bytes: [u8; mirror_pool_program::verifier::VK_SERIALIZED_LEN] =
+        std::fs::read(verifying_key)
+            .context("read verifying key")?
+            .try_into()
+            .map_err(|_| {
+                anyhow!(
+                    "verifying key must be {} bytes",
+                    mirror_pool_program::verifier::VK_SERIALIZED_LEN
+                )
+            })?;
 
     let data = mirror_pool_program::instruction::Instruction::InitializePool {
         depth: TREE_DEPTH as u8,

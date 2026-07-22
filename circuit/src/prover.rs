@@ -121,22 +121,10 @@ pub fn setup<R: RngCore + CryptoRng>(
         .map_err(|e| CircuitError::Setup(e.to_string()))
 }
 
-/// Fixed seed for the **reproducible development** setup ("mirror" in hex).
-///
-/// A setup seeded from a public constant is emphatically NOT production-safe:
-/// whoever runs it can reconstruct the toxic waste and forge membership proofs.
-/// Its sole purpose is a byte-reproducible dev verifying key (committed under
-/// `setup/`) so the shipped key can be regenerated and diffed. Production keys
-/// MUST come from a multi-party ceremony — see `SECURITY.md`.
-pub const DEV_SETUP_SEED: u64 = 0x6D69_7272_6F72;
-
-/// The deterministic development setup at the protocol tree depth. Reproducible
-/// across runs (fixed seed) so CI can regenerate and diff the committed VK.
-pub fn dev_setup() -> Result<(ProvingKey<Bn254>, VerifyingKey<Bn254>)> {
-    use rand::SeedableRng;
-    let mut rng = rand::rngs::StdRng::seed_from_u64(DEV_SETUP_SEED);
-    setup(mirror_pool_common::TREE_DEPTH, &mut rng)
-}
+// The former fixed-seed `dev_setup` (a single-party, public-seed setup) has been
+// removed: it was forgeable by anyone. Keys now come from the multi-contributor
+// Phase-2 ceremony in `crate::ceremony` (see `SECURITY.md`). Tests use `setup`
+// with a seeded RNG directly for a fast, throwaway key.
 
 /// Generate a proof for a fully-assigned circuit.
 pub fn prove<R: RngCore + CryptoRng>(

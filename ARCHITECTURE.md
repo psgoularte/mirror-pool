@@ -388,9 +388,14 @@ Sybil limitation, narrowing it while still disclosing the residual.
 
 **Exact guarantee.** Inclusion attests association-set membership; the exclusion
 reference attests non-membership of a sanctioned set. Nothing about identity,
-balance, or behavior. On-chain execute-action enforcement of an inclusion proof
-(a second bound Groth16 verify, ~2× the CU) is designed but left off by default;
-the off-chain ASP flow above is what ships.
+balance, or behavior.
+
+**Enforcement status (unambiguous).** The inclusion proof is generated and
+verified **off-chain** (the ASP checks it before vouching). It is **not** wired
+into the on-chain `execute_action`, and there is **no feature-gated code** for
+that in the program — on-chain enforcement (a second bound Groth16 verify, ~2×
+the CU, with a `nullifier_hash`-match to the action proof) is a **design note**,
+not implemented. The off-chain ASP flow is what ships.
 
 ## Threat model (milestone 8)
 

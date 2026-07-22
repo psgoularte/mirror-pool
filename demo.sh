@@ -54,10 +54,12 @@ echo "--- sim: effective-k over the association set vs all deposits (Sybil gap) 
 "$BIN" sim --members 16 --sybils 48 --actors 8 --epochs 2
 echo "--- associate: ZK inclusion proof (member in the association set) ---"
 WORK="$(mktemp -d)"
+echo "    (running a small Phase-2 ceremony for the proving key…)"
+"$BIN" setup --out-dir "$WORK/keys" --contributions 2 >/dev/null
 M="$("$BIN" keygen 2>/dev/null)"; S="$(echo "$M" | awk '/secret:/{print $2}')"; C="$(echo "$M" | awk '/commitment:/{print $2}')"
 OTHER="$("$BIN" keygen 2>/dev/null | awk '/commitment:/{print $2}')"
 printf '%s\n%s\n' "$C" "$OTHER" > "$WORK/assoc-set.txt"
-"$BIN" associate --set "$WORK/assoc-set.txt" --secret "$S" --epoch 1
+"$BIN" associate --proving-key "$WORK/keys/proving_key.bin" --set "$WORK/assoc-set.txt" --secret "$S" --epoch 1
 
 echo
 echo "==> demo complete. See ARCHITECTURE.md for the threat model and SECURITY.md"

@@ -12,6 +12,7 @@
 #![deny(missing_docs)]
 
 pub mod association;
+pub mod ceremony;
 pub mod circuit;
 pub mod error;
 pub mod poseidon_gadget;
