@@ -1853,6 +1853,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
 
 [[package]]
+name = "hex"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
 name = "histogram"
 version = "0.6.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2497,7 +2503,20 @@ dependencies = [
 name = "mirror-pool-cli"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "ark-bn254 0.5.0",
+ "ark-ff 0.5.0",
+ "ark-serialize 0.5.0",
+ "ark-std 0.5.0",
+ "clap",
+ "hex",
+ "mirror-pool-circuit",
  "mirror-pool-common",
+ "mirror-pool-program",
+ "mirror-pool-relayer",
+ "rand 0.8.7",
+ "solana-client",
+ "solana-sdk",
 ]
 
 [[package]]

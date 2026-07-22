@@ -14,9 +14,11 @@ generalized from "the right to withdraw funds" to "the right to trigger an
 action this epoch." **The PDA — not the member — is the on-chain actor**, and
 that indirection is the core unlinkability primitive.
 
-> **Status:** under active construction as a milestone PR sequence (see
-> [`SPEC.md`](./SPEC.md) and [`ARCHITECTURE.md`](./ARCHITECTURE.md)). Milestone 1
-> (workspace, CI, pinned Poseidon parameters) is complete.
+> **Status:** all eight milestones complete — membership circuit, on-chain
+> Groth16 verification (~98k CU), incremental tree + deposits, nullifiers +
+> `execute_action`, epochs, fee-paying relayer, a real integration, and the
+> compliance layer. See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the design and
+> threat model, and run [`./demo.sh`](./demo.sh) for the full flow on a local SVM.
 
 ## Everything is Rust
 
@@ -89,10 +91,56 @@ cargo build-sbf --manifest-path program/Cargo.toml
 
 ## Quickstart
 
-The end-to-end flow (deposit → epoch → relayed action → selective disclosure) on
-a local validator lands with the CLI and `demo.sh` in later milestones. This
-section will carry the copy-paste quickstart once `execute_action` and the
-relayer are in place.
+Run the entire protocol end-to-end — real SBF bytecode, real Groth16 proofs, on
+an in-process local SVM (litesvm), no external validator:
+
+```sh
+./demo.sh
+```
+
+It builds the program, verifies a proof on-chain under the CU budget, runs the
+full flow (initialize → deposit → open epoch → no-op action via the pool PDA →
+real SOL transfer → close epoch, with every negative rejected), exercises the
+compliance layer, and shows the CLI.
+
+### CLI (`mirror-pool`)
+
+```sh
+cargo build -p mirror-pool-cli
+BIN=target/debug/mirror-pool
+
+# One-time dev trusted setup (writes proving/verifying keys + on-chain VK bytes).
+$BIN setup --out-dir artifacts
+
+# A member generates a secret and deposits its commitment.
+$BIN keygen                       # -> secret + commitment
+$BIN deposit  --rpc-url <URL> --keypair <RELAYER.json> \
+              --program-id <PID> --pool-authority <AUTH> --commitment <HEX>
+
+# Build a membership proof into a relay job (offline), then a relayer submits it.
+$BIN prove    --proving-key artifacts/proving_key.bin --leaves leaves.txt \
+              --secret <HEX> --epoch 1 --selector 0 --out action.job
+$BIN execute  --rpc-url <URL> --keypair <RELAYER.json> \
+              --program-id <PID> --pool-authority <AUTH> --job action.job
+
+# Selective disclosure to an auditor, and the anonymity-set simulation.
+$BIN keygen --auditor             # -> auditor viewing keypair
+$BIN disclose --secret <HEX> --auditor-pubkey <HEX>
+$BIN sim --members 64 --actors 12 --epochs 3
+```
+
+The offline commands (`setup`, `keygen`, `prove`, `disclose`, `sim`) need no
+network. `deposit`/`execute` submit to the given RPC; `execute` goes through a
+relayer so the member never pays the fee.
+
+### Devnet
+
+Build and deploy the program, then point the CLI/relayer at devnet:
+
+```sh
+cargo build-sbf --manifest-path program/Cargo.toml
+solana program deploy target/deploy/mirror_pool_program.so --url devnet
+```
 
 ## License
 

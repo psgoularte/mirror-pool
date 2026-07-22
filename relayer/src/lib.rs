@@ -10,6 +10,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use borsh::{BorshDeserialize, BorshSerialize};
+use mirror_pool_program::action::{SELECTOR_NOOP, SELECTOR_TRANSFER};
 use mirror_pool_program::instruction::Instruction as PoolIx;
 use mirror_pool_program::verifier::{NUM_PUBLIC_INPUTS, PROOF_LEN};
 use mirror_pool_program::{state::POOL_SEED, NULLIFIER_SEED};
@@ -21,24 +22,16 @@ use solana_sdk::{
     transaction::Transaction,
 };
 
-/// An action account the relayer must include after the fixed set (the CPI
-/// target for the no-op, or the recipient for a transfer, etc.).
-#[derive(BorshSerialize, BorshDeserialize, Clone, Debug)]
-pub struct TrailingAccount {
-    pub pubkey: [u8; 32],
-    pub is_writable: bool,
-    pub is_signer: bool,
-}
-
 /// A self-contained relay request: everything needed to submit one
-/// `execute_action`, and nothing that identifies the member.
+/// `execute_action`, and nothing that identifies the member. The action's
+/// trailing accounts are derived from the selector/params, so the job carries
+/// no member-linkable account data.
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug)]
 pub struct RelayJob {
     pub proof: [u8; PROOF_LEN],
     pub public_inputs: [[u8; 32]; NUM_PUBLIC_INPUTS],
     pub action_selector: u8,
     pub action_params: Vec<u8>,
-    pub trailing_accounts: Vec<TrailingAccount>,
 }
 
 impl RelayJob {
@@ -89,20 +82,34 @@ pub fn build_execute_ix(
         AccountMeta::new(*fee_payer, true), // relayer pays the fee — never the member
         AccountMeta::new_readonly(solana_sdk::system_program::id(), false),
     ];
-    for t in &job.trailing_accounts {
-        let key = Pubkey::new_from_array(t.pubkey);
-        accounts.push(if t.is_writable {
-            AccountMeta::new(key, t.is_signer)
-        } else {
-            AccountMeta::new_readonly(key, t.is_signer)
-        });
-    }
+    // Trailing (action-specific) accounts, derived from the selector/params.
+    accounts.extend(trailing_accounts(program_id, job)?);
 
     Ok(Instruction {
         program_id: *program_id,
         accounts,
         data,
     })
+}
+
+/// Derive the action's trailing accounts (index 4 on) from the job. Adding a new
+/// action adds a case here (mirrors `program::action::dispatch`).
+fn trailing_accounts(program_id: &Pubkey, job: &RelayJob) -> Result<Vec<AccountMeta>> {
+    match job.action_selector {
+        SELECTOR_NOOP => Ok(vec![AccountMeta::new_readonly(*program_id, false)]),
+        SELECTOR_TRANSFER => {
+            if job.action_params.len() < 40 {
+                return Err(anyhow!("transfer params too short"));
+            }
+            let recipient = Pubkey::new_from_array(
+                job.action_params[8..40]
+                    .try_into()
+                    .map_err(|_| anyhow!("bad recipient"))?,
+            );
+            Ok(vec![AccountMeta::new(recipient, false)])
+        }
+        s => Err(anyhow!("unknown action selector {s}")),
+    }
 }
 
 /// Submit one job, signed and paid for by `relayer`. Returns the signature.

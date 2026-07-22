@@ -1,9 +1,9 @@
 # mirror-pool architecture
 
-This document is built up milestone by milestone. It currently covers the
-crypto foundation (milestone 1); the on-chain state machine, the `Action`
-extension guide, the compliance design, and the full threat model are filled in
-as their milestones land.
+This document covers the full protocol: the crypto foundation, the membership
+circuit, on-chain verification, the tree/nullifier/epoch state machine, the
+`Action` extension guide, the relayer, the compliance design, and the threat
+model. All eight milestones are complete (see the status table at the end).
 
 ## Component overview
 
@@ -272,10 +272,50 @@ an unscreened deposit is rejected, a screened one accepted, a disclosure is
 registered on-chain, the auditor recovers the secret and attributes the
 nullifier, and a stranger cannot.
 
-## Threat model *(milestone 8)*
+## Threat model (milestone 8)
 
-Full, honest treatment of deanonymization vectors and residual leakage. The
-summary in the [README](./README.md) is the current placeholder.
+mirror-pool provides **probabilistic, behavioral** anonymity. Your anonymity set
+for an action is the set of pool members who could plausibly have produced it —
+cryptographically, *every* member, but in practice narrowed by the operational
+factors below. An overclaimed guarantee is worse than an accurate one, so this
+section is explicit about residual leakage and about what the protocol does
+**not** defend.
+
+### What the cryptography guarantees
+
+Given an honest trusted setup and the Poseidon/Groth16 soundness, an observer of
+the chain learns, per action: that *some* member of the tree (under a recent
+root) performed action X in epoch E, and a `nullifier_hash` that is unlinkable to
+any commitment without the member's secret. They do **not** learn which leaf,
+which depositor, or any link between two actions by the same member across
+epochs (nullifiers are `Poseidon(secret, epoch)` — distinct and unlinkable per
+epoch). Double-acting in one epoch is prevented by the nullifier set.
+
+### Deanonymization vectors and mitigations
+
+| Vector | How it deanonymizes | Mitigation | Residual leakage |
+|---|---|---|---|
+| **Fee-payer linkage** | If the member's own wallet pays the action fee, the fee payer *is* the member. | The **relayer** is mandatory: it is the sole fee payer and signer of `execute_action`. The member's key never appears. | The relayer learns the member↔action link (it holds the job). Use a relayer you trust, or a relayer network; never self-relay. |
+| **Single-action windows** | If only one action lands in an epoch, an observer correlating deposits/epochs can narrow the actor. | Epoch windows (`open`/`close`) batch actions; the epoch batcher clusters submissions; `sim` reports the realized per-window count. | A thin window is weak. The protocol surfaces the count rather than hiding it — operators should keep windows busy. |
+| **Timing correlation** | Deposit→action latency, or repeated same-time behavior across epochs, can re-link a member. | Epoch batching decouples action time from any single member; per-epoch nullifiers prevent cross-epoch linkage of the *same* nullifier. | Behavioral timing patterns across epochs are **not** fully hidden. Documented as residual. |
+| **Amount / dust correlation** | For value-carrying actions (the transfer), a unique amount links input to output. | Bind amount into the proof (done) and use **denominated** amounts per integration so many members share the same amount. | Non-denominated or unique amounts leak. The transfer action allows arbitrary amounts; denomination is an integration-level policy, documented. |
+| **Anonymity-set size** | A tiny pool means few candidates. | Depth-20 tree (~1M capacity); `sim` reports the set size and warns on tiny pools. | Early in a pool's life the set is small. Wait for the pool to fill. |
+| **Trusted setup** | A retained setup secret ("toxic waste") lets an attacker forge membership proofs. | Documented requirement: production keys from a multi-party ceremony; the dev `setup` is for local use only. | If the ceremony is compromised, soundness (not privacy) breaks. Out of protocol scope. |
+| **Screening authority** | If enabled, the screening authority sees who deposits. | Off by default; when on, it is scoped to *entry* only and never sees actions. | Enabling screening trades some deposit-time privacy for compliance — an explicit, opt-in choice. |
+
+### What mirror-pool does NOT defend against
+
+- **Network-level deanonymization** (IP correlation of the submitter): use the
+  relayer over an anonymizing transport; out of protocol scope.
+- **A malicious or logging relayer**: it knows the member↔action link by
+  construction. Trust or decentralize the relayer.
+- **Global passive adversaries doing statistical disclosure** over long horizons
+  with thin windows and unique amounts: mitigated, not eliminated.
+- **Compromised trusted setup**: breaks soundness; requires a proper ceremony.
+
+The honest one-line summary: *mirror-pool hides which member acted, as strongly
+as the pool is large and the epoch window is busy, provided a trusted relayer
+pays the fee.*
 
 ## Milestone status
 
@@ -288,4 +328,4 @@ summary in the [README](./README.md) is the current placeholder.
 | 5 | Nullifier set + `execute_action` (no-op CPI) | ✅ done |
 | 6 | Epochs + relayer + one real integration | ✅ done |
 | 7 | Compliance (viewing keys + screening hook) | ✅ done |
-| 8 | Threat model + docs + demo | ⏳ next |
+| 8 | Threat model + docs + demo (`demo.sh`, CLI `sim`) | ✅ done |

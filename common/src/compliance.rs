@@ -51,6 +51,18 @@ impl ViewingKeypair {
     pub fn public_bytes(&self) -> [u8; 32] {
         self.public.to_bytes()
     }
+
+    /// The 32-byte secret scalar (persist this to reuse the keypair).
+    pub fn secret_bytes(&self) -> [u8; 32] {
+        self.secret.to_bytes()
+    }
+
+    /// Reconstruct a viewing keypair from a persisted secret.
+    pub fn from_secret_bytes(secret: [u8; 32]) -> Self {
+        let secret = StaticSecret::from(secret);
+        let public = PublicKey::from(&secret);
+        Self { secret, public }
+    }
 }
 
 /// Errors from the disclosure path.
