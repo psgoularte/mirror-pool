@@ -80,3 +80,6 @@ jobs:
 
       - name: full flow (prove → execute_action → nullifier/replay/negatives)
         run: cargo run --release --manifest-path bench/Cargo.toml --bin flow
+
+      - name: compliance (screening hook + selective disclosure)
+        run: cargo run --release --manifest-path bench/Cargo.toml --bin compliance

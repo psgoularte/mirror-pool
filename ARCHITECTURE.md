@@ -235,10 +235,42 @@ mismatch, tampered proof, wrong epoch, epoch-not-active), runs against the real
 SBF bytecode in the `bench` `flow` binary. Measured: `open`/`close` ≈1.5k CU,
 `execute_action` ≈110k CU.
 
-## Compliance design *(milestone 7)*
+## Compliance design (milestone 7)
 
-Viewing-key / selective-disclosure scheme and the pluggable deposit-screening
-hook, documented here when they land.
+The compliance layer is the differentiator, framed as **compliant behavioral
+privacy with selective disclosure**, not evasion.
+
+### Viewing keys / selective disclosure
+
+An auditor holds an X25519 **viewing keypair**. To disclose to that auditor, a
+member seals their `secret` to the auditor's public key
+(`common::compliance::seal_disclosure`, ECIES over X25519 + ChaCha20-Poly1305).
+The `register_viewing_key` instruction stores a `DisclosureRecord` at the PDA
+`["viewing", commitment]`: the member's commitment, the designated auditor, and
+the sealed secret. The auditor later reads it, opens the secret
+(`open_disclosure`), and for any epoch verifies that a given on-chain
+`nullifier_hash = Poseidon(secret, epoch)` was theirs (`verify_disclosure`),
+attributing the action.
+
+Properties: disclosure is **per-member, per-auditor**. One member disclosing to
+one auditor reveals nothing about any other member; there is no master key and
+no way to enumerate non-disclosing members. The sealed secret is public but
+opens only to the named auditor. Real-world identity is bound separately by the
+member attesting to their `commitment`.
+
+### Deposit-screening hook
+
+`PoolConfig.screening_authority` is all-zero by default (**screening off**).
+`set_screening_authority` (authority only) enables it; then every `deposit` must
+be co-signed by that authority, which is rejected otherwise
+(`ScreeningRequired`). The authority is pluggable: point it at the authority of
+an allowlist/attestation program that only co-signs deposits for vetted
+entrants. This gates entry without touching the anonymity mechanics.
+
+Both are exercised against the real bytecode by the `bench` `compliance` binary:
+an unscreened deposit is rejected, a screened one accepted, a disclosure is
+registered on-chain, the auditor recovers the secret and attributes the
+nullifier, and a stranger cannot.
 
 ## Threat model *(milestone 8)*
 
@@ -255,5 +287,5 @@ summary in the [README](./README.md) is the current placeholder.
 | 4 | Merkle tree + `deposit` + root history | ✅ done |
 | 5 | Nullifier set + `execute_action` (no-op CPI) | ✅ done |
 | 6 | Epochs + relayer + one real integration | ✅ done |
-| 7 | Compliance (viewing keys + screening hook) | ⏳ next |
-| 8 | Threat model + docs + demo | ⏳ |
+| 7 | Compliance (viewing keys + screening hook) | ✅ done |
+| 8 | Threat model + docs + demo | ⏳ next |

@@ -17,6 +17,7 @@ use solana_program::{
     instruction::Instruction as SolInstruction,
     msg,
     program::invoke_signed,
+    program_error::ProgramError,
     pubkey::Pubkey,
     rent::Rent,
     sysvar::Sysvar,
@@ -74,6 +75,14 @@ pub fn process_instruction(
         Instruction::NoOpAction => process_noop_action(accounts),
         Instruction::OpenEpoch => process_epoch(program_id, accounts, true),
         Instruction::CloseEpoch => process_epoch(program_id, accounts, false),
+        Instruction::SetScreeningAuthority { authority } => {
+            process_set_screening_authority(program_id, accounts, authority)
+        }
+        Instruction::RegisterViewingKey {
+            commitment,
+            auditor,
+            sealed_secret,
+        } => process_register_viewing_key(program_id, accounts, commitment, auditor, sealed_secret),
     }
 }
 
@@ -142,6 +151,10 @@ fn process_initialize_pool(
 }
 
 /// `Deposit`: insert a commitment leaf, advancing the tree and root history.
+///
+/// Accounts: `[pool (writable), <screening_authority (signer)>]`. The screening
+/// account is required only when the pool has screening enabled — the pluggable,
+/// off-by-default entry hook.
 fn process_deposit(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -157,8 +170,110 @@ fn process_deposit(
     if config.is_initialized == 0 {
         return Err(MirrorPoolError::NotInitialized.into());
     }
+
+    // Deposit-screening hook (off by default).
+    if config.screening_enabled() {
+        let screener = next_account_info(account_iter)
+            .map_err(|_| ProgramError::from(MirrorPoolError::ScreeningRequired))?;
+        if screener.key.to_bytes() != config.screening_authority {
+            return Err(MirrorPoolError::ScreeningRequired.into());
+        }
+        if !screener.is_signer {
+            return Err(MirrorPoolError::ScreeningRequired.into());
+        }
+    }
+
     let index = config.insert(commitment)?;
     msg!("mirror-pool: deposit at leaf index {}", index);
+    Ok(())
+}
+
+/// `SetScreeningAuthority`: enable/disable the deposit-screening hook
+/// (authority only). Accounts: `[pool (writable), authority (signer)]`.
+fn process_set_screening_authority(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    new_authority: [u8; 32],
+) -> ProgramResult {
+    let account_iter = &mut accounts.iter();
+    let pool_account = next_account_info(account_iter)?;
+    let authority = next_account_info(account_iter)?;
+    if pool_account.owner != program_id {
+        return Err(MirrorPoolError::InvalidAccountOwner.into());
+    }
+    if !authority.is_signer {
+        return Err(MirrorPoolError::MissingSignature.into());
+    }
+    let mut data = pool_account.try_borrow_mut_data()?;
+    let config = PoolConfig::load_mut(&mut data)?;
+    if config.is_initialized == 0 {
+        return Err(MirrorPoolError::NotInitialized.into());
+    }
+    if config.authority != authority.key.to_bytes() {
+        return Err(MirrorPoolError::NotPoolAuthority.into());
+    }
+    config.screening_authority = new_authority;
+    msg!("mirror-pool: screening authority updated");
+    Ok(())
+}
+
+/// `RegisterViewingKey`: create a persistent selective-disclosure record at the
+/// PDA `["viewing", commitment]`. Accounts:
+/// `[payer (signer, writable), record (writable), system_program]`.
+fn process_register_viewing_key(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    commitment: [u8; 32],
+    auditor: [u8; 32],
+    sealed_secret: Vec<u8>,
+) -> ProgramResult {
+    if sealed_secret.len() > state::DisclosureRecord::MAX_SEALED_LEN {
+        return Err(MirrorPoolError::InvalidInstructionData.into());
+    }
+    let account_iter = &mut accounts.iter();
+    let payer = next_account_info(account_iter)?;
+    let record_account = next_account_info(account_iter)?;
+    let system_program = next_account_info(account_iter)?;
+
+    if !payer.is_signer {
+        return Err(MirrorPoolError::MissingSignature.into());
+    }
+    let (expected, bump) =
+        Pubkey::find_program_address(&[state::VIEWING_SEED, &commitment], program_id);
+    if expected != *record_account.key {
+        return Err(MirrorPoolError::InvalidPoolAddress.into());
+    }
+    if record_account.owner == program_id && !record_account.data_is_empty() {
+        return Err(MirrorPoolError::AlreadyInitialized.into());
+    }
+
+    let record = state::DisclosureRecord {
+        commitment,
+        auditor,
+        sealed_secret,
+    };
+    let len = record.serialized_len();
+    let rent = Rent::get()?;
+    invoke_signed(
+        &create_account_ix(
+            payer.key,
+            record_account.key,
+            rent.minimum_balance(len),
+            len as u64,
+            program_id,
+        ),
+        &[
+            payer.clone(),
+            record_account.clone(),
+            system_program.clone(),
+        ],
+        &[&[state::VIEWING_SEED, &commitment, &[bump]]],
+    )?;
+
+    let mut data = record_account.try_borrow_mut_data()?;
+    borsh::to_writer(&mut data[..], &record)
+        .map_err(|_| ProgramError::from(MirrorPoolError::InvalidInstructionData))?;
+    msg!("mirror-pool: viewing-key disclosure registered");
     Ok(())
 }
 

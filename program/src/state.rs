@@ -14,12 +14,40 @@
 use crate::error::MirrorPoolError;
 use crate::merkle::{hash_pair, zero_hashes};
 use crate::verifier::VK_SERIALIZED_LEN;
+use borsh::{BorshDeserialize, BorshSerialize};
 use bytemuck::{Pod, Zeroable};
 use mirror_pool_common::{ROOT_HISTORY_SIZE, TREE_DEPTH};
 use solana_program::program_error::ProgramError;
 
 /// PDA seed prefix for a pool config account.
 pub const POOL_SEED: &[u8] = b"pool";
+/// PDA seed prefix for a per-commitment viewing-key disclosure record.
+pub const VIEWING_SEED: &[u8] = b"viewing";
+
+/// A selective-disclosure record: a member's commitment, the auditor they
+/// designated, and the member's `secret` sealed to that auditor's viewing key.
+///
+/// Stored on-chain so disclosure is persistent and auditable. The ciphertext is
+/// public but only the named auditor can open it (see
+/// `mirror_pool_common::compliance`); it reveals nothing to anyone else and
+/// nothing about non-disclosing members.
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct DisclosureRecord {
+    pub commitment: [u8; 32],
+    pub auditor: [u8; 32],
+    pub sealed_secret: Vec<u8>,
+}
+
+impl DisclosureRecord {
+    /// Cap on the sealed ciphertext, so account sizing is bounded. An ECIES
+    /// blob for a 32-byte secret is `32 + 12 + 48 = 92` bytes; 128 is ample.
+    pub const MAX_SEALED_LEN: usize = 128;
+
+    /// Serialized length for this record (borsh: 32 + 32 + 4 + len).
+    pub fn serialized_len(&self) -> usize {
+        32 + 32 + 4 + self.sealed_secret.len()
+    }
+}
 
 /// Pool configuration + incremental Merkle tree state (zero-copy, `align = 1`).
 #[repr(C)]
@@ -55,6 +83,11 @@ pub struct PoolConfig {
     pub verifying_key: [u8; VK_SERIALIZED_LEN],
     /// 1 while an epoch window is open (actions allowed), 0 otherwise.
     pub epoch_active: u8,
+    /// Deposit-screening authority. All-zero means screening is **off** (the
+    /// default). When set, every deposit must be co-signed by this key — a
+    /// pluggable hook: point it at an allowlist/attestation program's authority
+    /// to gate entry. Documented as opt-in.
+    pub screening_authority: [u8; 32],
 }
 
 impl PoolConfig {
@@ -71,7 +104,8 @@ impl PoolConfig {
         + (TREE_DEPTH * 32)
         + 8
         + VK_SERIALIZED_LEN
-        + 1;
+        + 1
+        + 32;
 
     /// Reinterpret an account's bytes as a mutable `PoolConfig` (no copy).
     pub fn load_mut(data: &mut [u8]) -> Result<&mut Self, ProgramError> {
@@ -129,7 +163,13 @@ impl PoolConfig {
             .copy_from_slice(&zeros_full[..TREE_DEPTH]);
         self.verifying_key.copy_from_slice(verifying_key);
         self.epoch_active = 0;
+        self.screening_authority = [0u8; 32]; // screening off by default
         Ok(())
+    }
+
+    /// Whether deposit screening is enabled (a non-zero authority is set).
+    pub fn screening_enabled(&self) -> bool {
+        self.screening_authority != [0u8; 32]
     }
 
     /// Open a new epoch window (crank). Advances `current_epoch` and marks it

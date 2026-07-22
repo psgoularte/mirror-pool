@@ -22,6 +22,10 @@ path = "src/e2e.rs"
 name = "flow"
 path = "src/flow.rs"
 
+[[bin]]
+name = "compliance"
+path = "src/compliance.rs"
+
 [dependencies]
 litesvm = "0.14"
 # Reference tree/hashing + the prover to drive the full flow. These pull

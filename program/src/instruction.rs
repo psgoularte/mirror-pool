@@ -53,6 +53,18 @@ pub enum Instruction {
 
     /// Crank: close the current epoch window (authority only).
     CloseEpoch,
+
+    /// Set (or clear, with all-zero) the deposit-screening authority
+    /// (authority only). When set, deposits must be co-signed by it.
+    SetScreeningAuthority { authority: [u8; 32] },
+
+    /// Register a selective-disclosure record: the member's commitment, the
+    /// designated auditor, and the member's secret sealed to that auditor.
+    RegisterViewingKey {
+        commitment: [u8; 32],
+        auditor: [u8; 32],
+        sealed_secret: Vec<u8>,
+    },
 }
 
 impl Instruction {

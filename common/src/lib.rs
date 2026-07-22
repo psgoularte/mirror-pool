@@ -11,6 +11,8 @@
 pub mod error;
 
 #[cfg(feature = "crypto")]
+pub mod compliance;
+#[cfg(feature = "crypto")]
 pub mod field;
 #[cfg(feature = "crypto")]
 pub mod merkle;

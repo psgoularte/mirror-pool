@@ -20,10 +20,23 @@ ark-serialize = { workspace = true, optional = true }
 ark-std = { workspace = true, optional = true }
 light-poseidon = { workspace = true, optional = true }
 sha2 = { version = "0.10", optional = true }
+x25519-dalek = { version = "2", features = ["static_secrets"], optional = true }
+chacha20poly1305 = { version = "0.10", optional = true }
+rand_core = { version = "0.6", optional = true }
 
 [features]
 default = ["crypto"]
-crypto = ["dep:ark-bn254", "dep:ark-ff", "dep:ark-serialize", "dep:ark-std", "dep:light-poseidon", "dep:sha2"]
+crypto = [
+    "dep:ark-bn254",
+    "dep:ark-ff",
+    "dep:ark-serialize",
+    "dep:ark-std",
+    "dep:light-poseidon",
+    "dep:sha2",
+    "dep:x25519-dalek",
+    "dep:chacha20poly1305",
+    "dep:rand_core",
+]
 
 [dev-dependencies]
 ark-std = { workspace = true, features = ["std"] }

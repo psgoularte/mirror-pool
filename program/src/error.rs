@@ -80,6 +80,9 @@ pub enum MirrorPoolError {
 
     #[error("the signer is not the pool authority")]
     NotPoolAuthority = 23,
+
+    #[error("deposit screening is enabled: a valid screening-authority signature is required")]
+    ScreeningRequired = 24,
 }
 
 impl From<MirrorPoolError> for ProgramError {
