@@ -38,16 +38,21 @@ use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisE
 /// only the shape (tree depth) with no secret data.
 #[derive(Clone)]
 pub struct MembershipCircuit {
-    // Shape.
+    /// Tree depth (circuit shape). Public/structural, not a witness value.
     pub depth: usize,
-    // Private witness.
+    /// Private: the member's secret (nullifier preimage).
     pub secret: Option<Fr>,
+    /// Private: sibling hashes along the authentication path.
     pub path_elements: Vec<Option<Fr>>,
+    /// Private: direction bits along the authentication path.
     pub path_indices: Vec<Option<bool>>,
-    // Public instance.
+    /// Public: the Merkle root membership is proved under.
     pub merkle_root: Option<Fr>,
+    /// Public: `Poseidon(secret, epoch_id)`.
     pub nullifier_hash: Option<Fr>,
+    /// Public: the epoch this proof is valid for.
     pub epoch_id: Option<Fr>,
+    /// Public: the action/params this proof authorizes.
     pub action_binding: Option<Fr>,
 }
 

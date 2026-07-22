@@ -7,6 +7,7 @@
 //! `light-poseidon` and are gated behind the default `crypto` feature; the
 //! program depends on this crate with `default-features = false` and hashes via
 //! the `sol_poseidon` syscall instead.
+#![deny(missing_docs)]
 
 pub mod error;
 

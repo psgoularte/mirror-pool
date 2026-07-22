@@ -9,6 +9,8 @@
 //! valid in-circuit hashes identically to the native prover and the on-chain
 //! `sol_poseidon` syscall.
 
+#![deny(missing_docs)]
+
 pub mod circuit;
 pub mod error;
 pub mod poseidon_gadget;

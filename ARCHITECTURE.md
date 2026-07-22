@@ -216,6 +216,37 @@ epoch, so tighter windows with more participants mean stronger anonymity.
 Nullifiers are epoch-scoped (`Poseidon(secret, epoch_id)`), so each membership
 can act once per epoch.
 
+## Anonymity-set metric & the on-chain minimum (`k_min`)
+
+**Definition.** For an observed action in an epoch, its *anonymity set* is the
+set of pool members who could plausibly be its initiator — members whose
+commitment is in the tree and who have not already nullified in that epoch. The
+figure the protocol cares about is the **worst-case minimum `k` across the
+epoch** (the smallest such set for any action in the window), not an average and
+not a raw activity count.
+
+**What is computable — and enforced — on-chain.** The program cannot see the
+true set (nullifiers are unlinkable to commitments), but it can compute a
+conservative **lower bound** from its own state: `members_deposited −
+actions_this_epoch` (`next_index − epoch_actions`). At least that many members
+provably have not acted this epoch, so the current actor is hidden among at
+least that many. `execute_action` **rejects** with `AnonymitySetTooSmall` unless
+this bound is `≥ k_min`, a per-pool parameter set at `initialize_pool`.
+`epoch_actions` increments only on a fully-successful action and resets each
+`open_epoch`.
+
+**Limitations (do not overclaim).**
+
+- It is a **lower bound**, not the exact set; the observer-facing set is usually
+  larger (the whole membership).
+- It bounds *program-visible* membership, **not honest anonymity**. Deposits are
+  permissionless (screening off by default), so an adversary can **Sybil-inflate
+  `next_index`** with self-controlled commitments to satisfy `k_min` while the
+  honest set is ~1, then subtract its own notes. This is inherent to every
+  commitment-set anonymity design; mitigate operationally by enabling the
+  deposit-screening hook or requiring staked/attested deposits. `k_min` is a
+  guard against *empty-window* leakage, not a defense against a Sybil adversary.
+
 ## Relayer & epoch batcher (milestone 6)
 
 The `relayer` crate is **core, not optional**: it submits `execute_action` and
@@ -296,10 +327,10 @@ epoch). Double-acting in one epoch is prevented by the nullifier set.
 | Vector | How it deanonymizes | Mitigation | Residual leakage |
 |---|---|---|---|
 | **Fee-payer linkage** | If the member's own wallet pays the action fee, the fee payer *is* the member. | The **relayer** is mandatory: it is the sole fee payer and signer of `execute_action`. The member's key never appears. | The relayer learns the member↔action link (it holds the job). Use a relayer you trust, or a relayer network; never self-relay. |
-| **Single-action windows** | If only one action lands in an epoch, an observer correlating deposits/epochs can narrow the actor. | Epoch windows (`open`/`close`) batch actions; the epoch batcher clusters submissions; `sim` reports the realized per-window count. | A thin window is weak. The protocol surfaces the count rather than hiding it — operators should keep windows busy. |
+| **Single-action windows** | If only one action lands in an epoch, an observer correlating deposits/epochs can narrow the actor. | Enforced on-chain: `execute_action` rejects unless `members − actions_this_epoch ≥ k_min` (`AnonymitySetTooSmall`); epoch batcher clusters submissions; `sim` reports the realized count. | The bound is program-visible membership, not honest anonymity (see Sybil row). |
 | **Timing correlation** | Deposit→action latency, or repeated same-time behavior across epochs, can re-link a member. | Epoch batching decouples action time from any single member; per-epoch nullifiers prevent cross-epoch linkage of the *same* nullifier. | Behavioral timing patterns across epochs are **not** fully hidden. Documented as residual. |
-| **Amount / dust correlation** | For value-carrying actions (the transfer), a unique amount links input to output. | Bind amount into the proof (done) and use **denominated** amounts per integration so many members share the same amount. | Non-denominated or unique amounts leak. The transfer action allows arbitrary amounts; denomination is an integration-level policy, documented. |
-| **Anonymity-set size** | A tiny pool means few candidates. | Depth-20 tree (~1M capacity); `sim` reports the set size and warns on tiny pools. | Early in a pool's life the set is small. Wait for the pool to fill. |
+| **Amount / dust correlation** | For value-carrying actions (the transfer), a unique amount links input to output. | The `TransferAction` accepts only **fixed denominations** (0.1/1/10 SOL), and the amount is proof-bound, so it is not a distinguishing feature (`InvalidDenomination` otherwise). | A new value-carrying integration must adopt denominations too; arbitrary-amount actions would leak. |
+| **Anonymity-set size / Sybil** | A tiny pool means few candidates; worse, permissionless deposits let an attacker Sybil-inflate the pool to satisfy `k_min` while the honest set is ~1. | Depth-20 tree (~1M capacity); on-chain `k_min`; the deposit-screening hook can gate entry to vetted/attested/staked depositors. | `k_min` bounds program-visible membership, **not** honest anonymity against a Sybil adversary. Enable screening or staked deposits for real deployments. Inherent to commitment-set designs. |
 | **Trusted setup** | A retained setup secret ("toxic waste") lets an attacker forge membership proofs. | Documented requirement: production keys from a multi-party ceremony; the dev `setup` is for local use only. | If the ceremony is compromised, soundness (not privacy) breaks. Out of protocol scope. |
 | **Screening authority** | If enabled, the screening authority sees who deposits. | Off by default; when on, it is scoped to *entry* only and never sees actions. | Enabling screening trades some deposit-time privacy for compliance — an explicit, opt-in choice. |
 

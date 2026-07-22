@@ -21,7 +21,9 @@ use ark_ff::AdditiveGroup;
 /// that level (so the parent is `Poseidon(sibling, current)`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MerkleProof {
+    /// Sibling hash at each level, from leaf (index 0) to the root.
     pub path_elements: Vec<Fr>,
+    /// Direction bit at each level: `true` = current node is the right child.
     pub path_indices: Vec<bool>,
 }
 
@@ -63,10 +65,12 @@ impl MerkleTree {
     }
 
     /// Number of leaves currently in the tree.
+    /// Number of leaves currently inserted.
     pub fn len(&self) -> usize {
         self.leaves.len()
     }
 
+    /// Whether the tree has no leaves.
     pub fn is_empty(&self) -> bool {
         self.leaves.is_empty()
     }

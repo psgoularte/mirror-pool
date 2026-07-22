@@ -17,7 +17,9 @@ cd "$(dirname "$0")"
 
 echo "==> 1/6  Building the DEPLOYED program artifact (default features — the"
 echo "         benchmark-only VerifyMembership instruction is NOT included)"
-cargo build-sbf --manifest-path program/Cargo.toml
+# --arch v3 matches the sBPF version enabled on current Agave clusters (the
+# default v0 is not yet feature-gated on-chain and fails `program deploy`).
+cargo build-sbf --manifest-path program/Cargo.toml --arch v3
 
 echo
 echo "==> 2/6  Full flow: initialize -> deposit -> open epoch -> prove ->"
@@ -38,10 +40,10 @@ echo
 echo "==> 5/6  Compute-unit benchmark (real proof verified on-chain, < 200k CU)."
 echo "         Uses a SEPARATE bench-featured build; the deployed .so above stays"
 echo "         benchmark-free. The default artifact is restored afterwards."
-cargo build-sbf --manifest-path program/Cargo.toml --features bench
+cargo build-sbf --manifest-path program/Cargo.toml --features bench --arch v3
 cargo test -p mirror-pool-program --features bench --test gen_fixture -- --ignored --nocapture >/dev/null
 cargo run --release --manifest-path bench/Cargo.toml --bin cu-bench
-cargo build-sbf --manifest-path program/Cargo.toml   # restore the deployed artifact
+cargo build-sbf --manifest-path program/Cargo.toml --arch v3  # restore the deployed artifact
 
 echo
 echo "==> 6/6  CLI: keys, and the anonymity-set simulation"

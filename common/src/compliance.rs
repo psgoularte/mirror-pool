@@ -36,6 +36,7 @@ use x25519_dalek::{PublicKey, StaticSecret};
 /// An auditor's long-lived viewing keypair.
 pub struct ViewingKeypair {
     secret: StaticSecret,
+    /// The public viewing key a member seals disclosures to.
     pub public: PublicKey,
 }
 
@@ -68,10 +69,13 @@ impl ViewingKeypair {
 /// Errors from the disclosure path.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ComplianceError {
+    /// The sealed blob was the wrong length or otherwise unparseable.
     #[error("disclosure ciphertext is malformed")]
     MalformedCiphertext,
+    /// AEAD decryption/authentication failed (wrong viewing key or tampered).
     #[error("disclosure could not be decrypted with this viewing key")]
     DecryptionFailed,
+    /// The disclosed secret does not reproduce the on-chain nullifier.
     #[error("the disclosed secret does not produce the on-chain nullifier")]
     NullifierMismatch,
 }

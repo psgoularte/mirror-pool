@@ -1,23 +1,25 @@
 //! `mirror-pool` developer CLI (SPEC §4.5).
 //!
 //! Subcommands:
-//! * `setup`    — run the (dev) Groth16 trusted setup; write proving/verifying keys.
-//! * `keygen`   — generate a member secret, or an auditor viewing keypair.
-//! * `deposit`  — submit a commitment to a pool (on-chain).
-//! * `prove`    — build a membership proof and write a relay job.
-//! * `execute`  — hand a relay job to a relayer (submit `execute_action`).
-//! * `disclose` — seal a member's secret to an auditor (selective disclosure).
-//! * `sim`      — simulate N members over epochs; report the anonymity-set size.
+//! * `setup`     — deterministic (dev) Groth16 setup; writes proving/verifying keys.
+//! * `keygen`    — generate a member secret, or an auditor viewing keypair.
+//! * `init-pool` — create a pool on-chain (signer = authority; uses the dev VK).
+//! * `deposit`   — submit a commitment to a pool (on-chain).
+//! * `crank`     — open/close the epoch window (authority only, on-chain).
+//! * `prove`     — build a membership proof and write a relay job.
+//! * `execute`   — hand a relay job to a relayer (submit `execute_action`).
+//! * `disclose`  — seal a member's secret to an auditor (selective disclosure).
+//! * `sim`       — simulate N members over epochs; report the anonymity-set size.
 //!
 //! The offline commands (`setup`, `keygen`, `prove`, `disclose`, `sim`) need no
-//! network. The on-chain commands (`deposit`, `execute`) take an RPC endpoint.
+//! network. `init-pool`, `deposit`, `crank`, and `execute` take an RPC endpoint.
 
 use anyhow::{anyhow, Context, Result};
 use ark_bn254::Fr;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use clap::{Parser, Subcommand};
-use mirror_pool_circuit::prover::{build_witness, prove, setup, PublicInputs};
+use mirror_pool_circuit::prover::{build_witness, dev_setup, prove, PublicInputs};
 use mirror_pool_circuit::solana::{proof_to_solana, vk_to_solana};
 use mirror_pool_common::compliance::{seal_disclosure, ViewingKeypair};
 use mirror_pool_common::merkle::MerkleTree;
@@ -94,6 +96,30 @@ enum Command {
         #[arg(long, default_value_t = 3)]
         epochs: u64,
     },
+    /// Create a pool on-chain (the signer becomes the pool authority). Uses the
+    /// deterministic dev verifying key.
+    InitPool {
+        #[arg(long, default_value = "http://127.0.0.1:8899")]
+        rpc_url: String,
+        #[arg(long)]
+        keypair: PathBuf,
+        #[arg(long)]
+        program_id: String,
+        #[arg(long, default_value_t = 2)]
+        k_min: u64,
+    },
+    /// Open or close the current epoch (authority-only crank).
+    Crank {
+        #[arg(long, default_value = "http://127.0.0.1:8899")]
+        rpc_url: String,
+        #[arg(long)]
+        keypair: PathBuf,
+        #[arg(long)]
+        program_id: String,
+        /// `open` or `close`.
+        #[arg(long)]
+        action: String,
+    },
     /// Submit a commitment (on-chain).
     Deposit {
         #[arg(long, default_value = "http://127.0.0.1:8899")]
@@ -157,6 +183,18 @@ fn main() -> Result<()> {
             actors,
             epochs,
         } => cmd_sim(members, actors, epochs),
+        Command::InitPool {
+            rpc_url,
+            keypair,
+            program_id,
+            k_min,
+        } => cmd_init_pool(&rpc_url, &keypair, &program_id, k_min),
+        Command::Crank {
+            rpc_url,
+            keypair,
+            program_id,
+            action,
+        } => cmd_crank(&rpc_url, &keypair, &program_id, &action),
         Command::Deposit {
             rpc_url,
             keypair,
@@ -182,9 +220,10 @@ fn main() -> Result<()> {
 
 fn cmd_setup(out_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(out_dir).context("create out dir")?;
-    eprintln!("running dev Groth16 setup (depth {TREE_DEPTH})…");
-    let mut rng = OsRng;
-    let (pk, vk) = setup(TREE_DEPTH, &mut rng).map_err(|e| anyhow!("setup: {e}"))?;
+    eprintln!("running the deterministic DEV Groth16 setup (depth {TREE_DEPTH})…");
+    // Deterministic, fixed-seed DEV setup: reproduces the committed
+    // `setup/verifying_key.solana.bin`. NOT production-trusted.
+    let (pk, vk) = dev_setup().map_err(|e| anyhow!("setup: {e}"))?;
 
     let mut pk_bytes = Vec::new();
     pk.serialize_compressed(&mut pk_bytes)
@@ -201,7 +240,11 @@ fn cmd_setup(out_dir: &Path) -> Result<()> {
         "wrote proving_key.bin, verifying_key.bin, vk_solana.bin to {}",
         out_dir.display()
     );
-    println!("NOTE: this is a DEV setup. Production keys must come from a multi-party ceremony.");
+    println!(
+        "⚠  DEV setup only — seeded from a public constant, so whoever runs it \
+         can forge proofs. Production keys MUST come from a multi-party ceremony \
+         (see SECURITY.md)."
+    );
     Ok(())
 }
 
@@ -371,6 +414,74 @@ fn rpc_and_pool(
     let authority = Pubkey::from_str(pool_authority).context("pool authority")?;
     let pool = pool_pda(&program_id, &authority);
     Ok((rpc, program_id, pool))
+}
+
+fn cmd_init_pool(rpc_url: &str, keypair: &Path, program_id: &str, k_min: u64) -> Result<()> {
+    let rpc = RpcClient::new_with_commitment(rpc_url.to_string(), CommitmentConfig::confirmed());
+    let program_id = Pubkey::from_str(program_id).context("program id")?;
+    let payer = read_keypair_file(keypair).map_err(|e| anyhow!("read keypair: {e}"))?;
+    // The signer is the pool authority.
+    let pool = pool_pda(&program_id, &payer.pubkey());
+
+    // Dev verifying key (deterministic; reproduces setup/verifying_key.solana.bin).
+    let (_pk, vk) = dev_setup().map_err(|e| anyhow!("setup: {e}"))?;
+    let vk_bytes: [u8; mirror_pool_program::verifier::VK_SERIALIZED_LEN] = vk_to_solana(&vk)
+        .to_bytes()
+        .try_into()
+        .map_err(|_| anyhow!("vk length"))?;
+
+    let data = mirror_pool_program::instruction::Instruction::InitializePool {
+        depth: TREE_DEPTH as u8,
+        k_min,
+        verifying_key: vk_bytes,
+    }
+    .pack()
+    .map_err(|e| anyhow!("pack: {e:?}"))?;
+    let ix = Instruction {
+        program_id,
+        accounts: vec![
+            AccountMeta::new(payer.pubkey(), true),
+            AccountMeta::new(pool, false),
+            AccountMeta::new_readonly(solana_sdk::system_program::id(), false),
+        ],
+        data,
+    };
+    let bh = rpc.get_latest_blockhash().context("blockhash")?;
+    let tx = Transaction::new_signed_with_payer(&[ix], Some(&payer.pubkey()), &[&payer], bh);
+    let sig = rpc.send_and_confirm_transaction(&tx).context("init pool")?;
+    println!("pool {pool} initialized (k_min {k_min}): {sig}");
+    Ok(())
+}
+
+fn cmd_crank(rpc_url: &str, keypair: &Path, program_id: &str, action: &str) -> Result<()> {
+    let rpc = RpcClient::new_with_commitment(rpc_url.to_string(), CommitmentConfig::confirmed());
+    let program_id = Pubkey::from_str(program_id).context("program id")?;
+    let payer = read_keypair_file(keypair).map_err(|e| anyhow!("read keypair: {e}"))?;
+    let pool = pool_pda(&program_id, &payer.pubkey());
+    let ix_data = match action {
+        "open" => mirror_pool_program::instruction::Instruction::OpenEpoch,
+        "close" => mirror_pool_program::instruction::Instruction::CloseEpoch,
+        other => {
+            return Err(anyhow!(
+                "crank action must be 'open' or 'close', got '{other}'"
+            ))
+        }
+    }
+    .pack()
+    .map_err(|e| anyhow!("pack: {e:?}"))?;
+    let ix = Instruction {
+        program_id,
+        accounts: vec![
+            AccountMeta::new(pool, false),
+            AccountMeta::new_readonly(payer.pubkey(), true),
+        ],
+        data: ix_data,
+    };
+    let bh = rpc.get_latest_blockhash().context("blockhash")?;
+    let tx = Transaction::new_signed_with_payer(&[ix], Some(&payer.pubkey()), &[&payer], bh);
+    let sig = rpc.send_and_confirm_transaction(&tx).context("crank")?;
+    println!("epoch {action}: {sig}");
+    Ok(())
 }
 
 fn cmd_deposit(

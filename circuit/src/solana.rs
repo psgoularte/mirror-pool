@@ -59,8 +59,11 @@ pub fn g2_to_bytes(p: &G2Affine) -> [u8; G2_LEN] {
 /// A proof in the on-chain byte layout. `proof_a` is already negated.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SolanaProof {
+    /// G1 point `A`, **already negated**, `x_be || y_be`.
     pub proof_a: [u8; G1_LEN],
+    /// G2 point `B`, `x.c1 || x.c0 || y.c1 || y.c0` (big-endian).
     pub proof_b: [u8; G2_LEN],
+    /// G1 point `C`, `x_be || y_be`.
     pub proof_c: [u8; G1_LEN],
 }
 
@@ -88,10 +91,15 @@ pub fn proof_to_solana(proof: &Proof<Bn254>) -> SolanaProof {
 /// entries. Owned (not borrowed) so it can be embedded and parsed on-chain.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SolanaVerifyingKey {
+    /// `α` in G1.
     pub alpha_g1: [u8; G1_LEN],
+    /// `β` in G2.
     pub beta_g2: [u8; G2_LEN],
+    /// `γ` in G2.
     pub gamma_g2: [u8; G2_LEN],
+    /// `δ` in G2.
     pub delta_g2: [u8; G2_LEN],
+    /// The `γ_abc` / IC points (one per public input, plus the constant term).
     pub ic: Vec<[u8; G1_LEN]>,
 }
 

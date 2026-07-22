@@ -21,9 +21,13 @@ use rand::{CryptoRng, RngCore};
 /// and the on-chain verifier (milestone 3).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicInputs {
+    /// The Merkle root membership is proved under.
     pub merkle_root: Fr,
+    /// The epoch-scoped nullifier `Poseidon(secret, epoch_id)`.
     pub nullifier_hash: Fr,
+    /// The epoch the proof targets.
     pub epoch_id: Fr,
+    /// The action/params binding the proof authorizes.
     pub action_binding: Fr,
 }
 
@@ -59,7 +63,9 @@ impl PublicInputs {
 /// A ready-to-prove assignment: the circuit plus the public inputs it commits
 /// to. Built by [`build_witness`] so the two can never drift.
 pub struct Assignment {
+    /// The fully-assigned circuit ready for `prove`.
     pub circuit: MembershipCircuit,
+    /// The public inputs the circuit commits to.
     pub public_inputs: PublicInputs,
 }
 
@@ -113,6 +119,23 @@ pub fn setup<R: RngCore + CryptoRng>(
 ) -> Result<(ProvingKey<Bn254>, VerifyingKey<Bn254>)> {
     Groth16::<Bn254>::circuit_specific_setup(MembershipCircuit::empty(depth), rng)
         .map_err(|e| CircuitError::Setup(e.to_string()))
+}
+
+/// Fixed seed for the **reproducible development** setup ("mirror" in hex).
+///
+/// A setup seeded from a public constant is emphatically NOT production-safe:
+/// whoever runs it can reconstruct the toxic waste and forge membership proofs.
+/// Its sole purpose is a byte-reproducible dev verifying key (committed under
+/// `setup/`) so the shipped key can be regenerated and diffed. Production keys
+/// MUST come from a multi-party ceremony — see `SECURITY.md`.
+pub const DEV_SETUP_SEED: u64 = 0x6D69_7272_6F72;
+
+/// The deterministic development setup at the protocol tree depth. Reproducible
+/// across runs (fixed seed) so CI can regenerate and diff the committed VK.
+pub fn dev_setup() -> Result<(ProvingKey<Bn254>, VerifyingKey<Bn254>)> {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::StdRng::seed_from_u64(DEV_SETUP_SEED);
+    setup(mirror_pool_common::TREE_DEPTH, &mut rng)
 }
 
 /// Generate a proof for a fully-assigned circuit.

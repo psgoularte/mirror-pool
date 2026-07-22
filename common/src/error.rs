@@ -29,7 +29,13 @@ pub enum CommonError {
 
     /// A Merkle authentication path did not have the expected depth.
     #[error("merkle path length {got} does not match tree depth {expected}")]
-    MerklePathLength { got: usize, expected: usize },
+    MerklePathLength {
+        /// The length that was supplied.
+        got: usize,
+        /// The length that was required.
+        expected: usize,
+    },
 }
 
+/// Convenience result type for `common` fallible operations.
 pub type Result<T> = core::result::Result<T, CommonError>;
