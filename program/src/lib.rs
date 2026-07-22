@@ -72,6 +72,8 @@ pub fn process_instruction(
             &action_params,
         ),
         Instruction::NoOpAction => process_noop_action(accounts),
+        Instruction::OpenEpoch => process_epoch(program_id, accounts, true),
+        Instruction::CloseEpoch => process_epoch(program_id, accounts, false),
     }
 }
 
@@ -201,7 +203,11 @@ fn process_execute_action(
         if config.is_initialized == 0 {
             return Err(MirrorPoolError::NotInitialized.into());
         }
-        // Epoch: the proof must target the pool's current epoch.
+        // Epoch must be open, and the proof must target it — this forces
+        // actions to cluster inside a shared window (crowd synchronization).
+        if config.epoch_active == 0 {
+            return Err(MirrorPoolError::EpochNotActive.into());
+        }
         if *epoch_id != epoch_to_bytes(config.current_epoch()) {
             return Err(MirrorPoolError::EpochMismatch.into());
         }
@@ -209,9 +215,9 @@ fn process_execute_action(
         if !config.is_known_root(merkle_root) {
             return Err(MirrorPoolError::UnknownRoot.into());
         }
-        // Action binding: the proof must authorize exactly this action.
-        if *action_binding != action::action_binding(action_selector)? || !action_params.is_empty()
-        {
+        // Action binding: the proof must authorize exactly this action AND its
+        // parameters (amount, recipient, …).
+        if *action_binding != action::action_binding(action_selector, action_params)? {
             return Err(MirrorPoolError::ActionBindingMismatch.into());
         }
         // The proof itself.
@@ -275,6 +281,39 @@ fn process_noop_action(accounts: &[AccountInfo]) -> ProgramResult {
         return Err(MirrorPoolError::UnauthorizedActor.into());
     }
     msg!("mirror-pool: no-op action ran (selector {})", SELECTOR_NOOP);
+    Ok(())
+}
+
+/// `OpenEpoch` / `CloseEpoch` crank: advance or close the epoch window. Only the
+/// pool authority may crank. Accounts: `[pool (writable), authority (signer)]`.
+fn process_epoch(program_id: &Pubkey, accounts: &[AccountInfo], open: bool) -> ProgramResult {
+    let account_iter = &mut accounts.iter();
+    let pool_account = next_account_info(account_iter)?;
+    let authority = next_account_info(account_iter)?;
+
+    if pool_account.owner != program_id {
+        return Err(MirrorPoolError::InvalidAccountOwner.into());
+    }
+    if !authority.is_signer {
+        return Err(MirrorPoolError::MissingSignature.into());
+    }
+
+    let mut data = pool_account.try_borrow_mut_data()?;
+    let config = PoolConfig::load_mut(&mut data)?;
+    if config.is_initialized == 0 {
+        return Err(MirrorPoolError::NotInitialized.into());
+    }
+    if config.authority != authority.key.to_bytes() {
+        return Err(MirrorPoolError::NotPoolAuthority.into());
+    }
+
+    if open {
+        let epoch = config.open_epoch()?;
+        msg!("mirror-pool: epoch {} opened", epoch);
+    } else {
+        config.close_epoch()?;
+        msg!("mirror-pool: epoch {} closed", config.current_epoch());
+    }
     Ok(())
 }
 

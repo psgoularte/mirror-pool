@@ -68,6 +68,18 @@ pub enum MirrorPoolError {
 
     #[error("the pool PDA did not authorize this action")]
     UnauthorizedActor = 19,
+
+    #[error("the pool has insufficient funds for this action")]
+    InsufficientPoolFunds = 20,
+
+    #[error("no epoch is currently open for actions")]
+    EpochNotActive = 21,
+
+    #[error("the epoch is already open")]
+    EpochAlreadyOpen = 22,
+
+    #[error("the signer is not the pool authority")]
+    NotPoolAuthority = 23,
 }
 
 impl From<MirrorPoolError> for ProgramError {

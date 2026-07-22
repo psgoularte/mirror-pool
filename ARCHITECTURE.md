@@ -186,10 +186,54 @@ The `Action` trait (`program::action`) is the extensibility seam. An action is
 3. define the action's parameter layout and fold it into the action binding.
 
 Milestone 5 ships `NoOpAction` (a self-CPI proving the pool PDA signs) and the
-`no-op` selector. The full flow — initialize → deposit → prove → `execute_action`
-→ replay-rejected, plus tampered-proof / wrong-epoch / action-binding-mismatch
-negatives — runs against the real SBF bytecode in the `bench` `flow` binary.
-Measured: `execute_action` ≈110k CU.
+`no-op` selector. Milestone 6 adds `TransferAction`, a real integration that
+disburses SOL from the pool PDA to a recipient with the **amount and recipient
+bound into the proof** (`action_binding = Poseidon(selector, sha256(params))`).
+
+### Adding an integration (extension guide)
+
+To integrate protocol X (a swap, a stake, a lending deposit):
+
+1. Define `struct XAction;` and `impl Action for XAction`. `selector()` returns
+   a fresh stable byte; `execute(&ctx)` builds the CPI(s) into X's program and
+   calls `invoke_signed(&ix, &infos, &[ctx.pool_seeds])` — the pool PDA signs,
+   so X sees the pool, never the member. (`NoOpAction` is the reference shape;
+   `TransferAction` shows param handling.)
+2. Add `SELECTOR_X => Ok(Box::new(XAction))` to `action::dispatch`.
+3. Define X's parameter byte layout; the caller passes it as `action_params`,
+   and it is automatically folded into the action binding, so a proof authorizes
+   exactly those parameters.
+
+No change to the proof, nullifier, epoch, or Merkle machinery is required.
+
+## Epochs (milestone 6)
+
+`open_epoch` / `close_epoch` are authority-only cranks. `execute_action` is
+accepted only while an epoch is open **and** the proof's `epoch_id` equals the
+pool's `current_epoch`. This forces actions to cluster inside a shared window:
+the anonymity set for an action is the set of members who acted in the same open
+epoch, so tighter windows with more participants mean stronger anonymity.
+Nullifiers are epoch-scoped (`Poseidon(secret, epoch_id)`), so each membership
+can act once per epoch.
+
+## Relayer & epoch batcher (milestone 6)
+
+The `relayer` crate is **core, not optional**: it submits `execute_action` and
+**pays the fee**, so the member's wallet is never the fee payer (self-relaying
+trivially deanonymizes — see the threat model). A member produces a `RelayJob`
+(proof + public inputs + action + accounts) with the CLI and hands it to a
+relayer out of band; the relayer signs as the sole fee payer and submits. The
+`batch` subcommand submits every job in a directory within one window — the
+epoch batcher — and reports the achieved per-window anonymity-set size. The
+relayer keeps its Solana stack on the 2.3 line (matching the program) and never
+crosses Solana types with the program — it uses the program only for the borsh
+instruction encoding and PDA seed constants.
+
+The full flow (initialize → deposit → open epoch → prove → no-op action →
+transfer action → close epoch), plus the negatives (replay, action-binding
+mismatch, tampered proof, wrong epoch, epoch-not-active), runs against the real
+SBF bytecode in the `bench` `flow` binary. Measured: `open`/`close` ≈1.5k CU,
+`execute_action` ≈110k CU.
 
 ## Compliance design *(milestone 7)*
 
@@ -210,6 +254,6 @@ summary in the [README](./README.md) is the current placeholder.
 | 3 | On-chain Groth16 verification + CU benchmark (~98k CU) | ✅ done |
 | 4 | Merkle tree + `deposit` + root history | ✅ done |
 | 5 | Nullifier set + `execute_action` (no-op CPI) | ✅ done |
-| 6 | Epochs + relayer + one real integration | ⏳ next |
-| 7 | Compliance (viewing keys + screening hook) | ⏳ |
+| 6 | Epochs + relayer + one real integration | ✅ done |
+| 7 | Compliance (viewing keys + screening hook) | ⏳ next |
 | 8 | Threat model + docs + demo | ⏳ |

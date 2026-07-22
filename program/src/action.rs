@@ -15,26 +15,44 @@ use crate::instruction::Instruction as PoolInstruction;
 use solana_poseidon::{hashv, Endianness, Parameters};
 use solana_program::{
     account_info::AccountInfo,
+    hash::hash as sha256,
     instruction::{AccountMeta, Instruction},
     msg,
     program::invoke_signed,
     program_error::ProgramError,
     pubkey::Pubkey,
+    sysvar::Sysvar,
 };
 
-/// Selector for the no-op action (also feeds the action binding).
+/// Selector for the no-op action (self-CPI; carries no params).
 pub const SELECTOR_NOOP: u8 = 0;
+/// Selector for the native SOL transfer action (real integration).
+pub const SELECTOR_TRANSFER: u8 = 1;
 
-/// The action-binding value the proof must commit to for `selector`.
+/// Digest of an action's parameters, matching `common::poseidon::params_digest`.
+/// Empty params → zero; otherwise SHA-256 with the top byte cleared (so the
+/// value is a canonical BN254 field element with no reduction).
+fn params_digest(params: &[u8]) -> [u8; 32] {
+    if params.is_empty() {
+        return [0u8; 32];
+    }
+    let mut d = sha256(params).to_bytes();
+    d[0] = 0;
+    d
+}
+
+/// The action-binding value the proof must commit to for `(selector, params)`.
 ///
-/// `action_binding = Poseidon(be32(selector))`. Binding the selector into the
-/// proof stops a proof authorized for one action from being replayed for
-/// another. (Actions with parameters extend this to hash the params too;
-/// milestone 5's no-op takes none.) Mirrors `common::poseidon::action_binding`.
-pub fn action_binding(selector: u8) -> Result<[u8; 32], ProgramError> {
-    let mut field = [0u8; 32];
-    field[31] = selector; // big-endian 32-byte encoding of the small integer
-    let h = hashv(Parameters::Bn254X5, Endianness::BigEndian, &[&field])
+/// `action_binding = Poseidon(be32(selector), params_digest(params))`. Binding
+/// both the selector *and* the parameters into the proof stops a proof from
+/// being replayed for a different action or different parameters (e.g. a
+/// different transfer amount or recipient). Mirrors
+/// `common::poseidon::action_binding`.
+pub fn action_binding(selector: u8, params: &[u8]) -> Result<[u8; 32], ProgramError> {
+    let mut sel = [0u8; 32];
+    sel[31] = selector; // big-endian 32-byte encoding of the small integer
+    let digest = params_digest(params);
+    let h = hashv(Parameters::Bn254X5, Endianness::BigEndian, &[&sel, &digest])
         .map_err(|_| ProgramError::from(MirrorPoolError::PoseidonFailed))?;
     Ok(h.to_bytes())
 }
@@ -94,11 +112,84 @@ impl Action for NoOpAction {
     }
 }
 
+/// A real integration: disburse `amount` lamports from the pool PDA to a
+/// recipient, on a member's behalf. The pool PDA is the actor, so an observer
+/// cannot link the disbursement to the member who authorized it.
+///
+/// Parameters (40 bytes, bound into the proof): `amount: u64 (LE) ||
+/// recipient: [u8; 32]`. The recipient account is passed as `ctx.accounts[0]`
+/// and must match the bound key. Because the pool account is program-owned,
+/// lamports are moved by direct balance arithmetic (the System program cannot
+/// transfer out of a non-system-owned account); the pool is kept rent-exempt.
+///
+/// A CPI-based integration (a swap, a stake) implements this same trait but
+/// calls `invoke_signed` into the venue program — see [`NoOpAction`] for the
+/// PDA-signed CPI shape.
+pub struct TransferAction;
+
+impl TransferAction {
+    pub const PARAMS_LEN: usize = 8 + 32;
+}
+
+impl Action for TransferAction {
+    fn selector(&self) -> u8 {
+        SELECTOR_TRANSFER
+    }
+
+    fn execute(&self, ctx: &ActionContext) -> Result<(), ProgramError> {
+        if ctx.params.len() != Self::PARAMS_LEN {
+            return Err(MirrorPoolError::InvalidInstructionData.into());
+        }
+        let amount = u64::from_le_bytes(
+            ctx.params[..8]
+                .try_into()
+                .map_err(|_| ProgramError::from(MirrorPoolError::InvalidInstructionData))?,
+        );
+        let recipient_key = Pubkey::new_from_array(
+            ctx.params[8..40]
+                .try_into()
+                .map_err(|_| ProgramError::from(MirrorPoolError::InvalidInstructionData))?,
+        );
+        let recipient = ctx
+            .accounts
+            .first()
+            .ok_or(ProgramError::from(MirrorPoolError::MissingAccount))?;
+        if *recipient.key != recipient_key {
+            return Err(MirrorPoolError::ActionBindingMismatch.into());
+        }
+
+        // The pool must remain rent-exempt after the disbursement.
+        let rent = solana_program::rent::Rent::get()?;
+        let min = rent.minimum_balance(crate::state::PoolConfig::LEN);
+        let pool_balance = ctx.pool.lamports();
+        let remaining = pool_balance
+            .checked_sub(amount)
+            .ok_or(ProgramError::from(MirrorPoolError::InsufficientPoolFunds))?;
+        if remaining < min {
+            return Err(MirrorPoolError::InsufficientPoolFunds.into());
+        }
+
+        // Move lamports out of the program-owned pool account directly.
+        **ctx.pool.try_borrow_mut_lamports()? = remaining;
+        **recipient.try_borrow_mut_lamports()? = recipient
+            .lamports()
+            .checked_add(amount)
+            .ok_or(ProgramError::from(MirrorPoolError::InsufficientPoolFunds))?;
+
+        msg!(
+            "mirror-pool: transfer action moved {} lamports via pool PDA",
+            amount
+        );
+        Ok(())
+    }
+}
+
 /// Resolve a selector to its [`Action`]. The single extension point: a new
 /// integration adds one arm here plus an `impl Action`.
 pub fn dispatch(selector: u8) -> Result<Box<dyn Action>, ProgramError> {
     match selector {
         SELECTOR_NOOP => Ok(Box::new(NoOpAction)),
+        SELECTOR_TRANSFER => Ok(Box::new(TransferAction)),
         _ => Err(MirrorPoolError::UnknownAction.into()),
     }
 }

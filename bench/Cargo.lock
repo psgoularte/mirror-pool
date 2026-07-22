@@ -1514,6 +1514,7 @@ dependencies = [
  "ark-serialize 0.5.0",
  "ark-std 0.5.0",
  "light-poseidon 0.4.0",
+ "sha2 0.10.9",
  "thiserror 1.0.69",
 ]
 

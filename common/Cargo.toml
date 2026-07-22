@@ -19,10 +19,11 @@ ark-ff = { workspace = true, optional = true }
 ark-serialize = { workspace = true, optional = true }
 ark-std = { workspace = true, optional = true }
 light-poseidon = { workspace = true, optional = true }
+sha2 = { version = "0.10", optional = true }
 
 [features]
 default = ["crypto"]
-crypto = ["dep:ark-bn254", "dep:ark-ff", "dep:ark-serialize", "dep:ark-std", "dep:light-poseidon"]
+crypto = ["dep:ark-bn254", "dep:ark-ff", "dep:ark-serialize", "dep:ark-std", "dep:light-poseidon", "dep:sha2"]
 
 [dev-dependencies]
 ark-std = { workspace = true, features = ["std"] }

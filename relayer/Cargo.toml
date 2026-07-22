@@ -12,4 +12,12 @@ name = "mirror-pool-relayer"
 path = "src/main.rs"
 
 [dependencies]
-mirror-pool-common.workspace = true
+# The program is a dependency only for the borsh instruction encoding and the
+# PDA seed / size constants (no Solana types cross the boundary), so the
+# relayer's Solana stack stays on one major (2.3).
+mirror-pool-program = { path = "../program", features = ["no-entrypoint"] }
+solana-client = "2.3"
+solana-sdk = "2.3"
+borsh = { version = "1", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"

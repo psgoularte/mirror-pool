@@ -31,6 +31,7 @@ use crate::error::{CommonError, Result};
 use ark_bn254::Fr;
 use ark_ff::{AdditiveGroup, Field};
 use light_poseidon::{parameters::bn254_x5::get_poseidon_parameters, PoseidonParameters};
+use sha2::Digest;
 use std::sync::OnceLock;
 
 /// Poseidon arity used for a leaf commitment: `commitment = Poseidon(secret)`.
@@ -144,11 +145,29 @@ pub fn hash_pair(left: Fr, right: Fr) -> Fr {
     hash(&[left, right]).expect("arity 2 is supported")
 }
 
-/// `action_binding = Poseidon(selector)` — the value a proof commits to so it
-/// authorizes exactly one action. Mirrors `program::action::action_binding`
-/// (the on-chain syscall computes the identical field element).
-pub fn action_binding(selector: u8) -> Fr {
-    commitment(Fr::from(selector as u64))
+/// Digest of an action's parameters as a field element.
+///
+/// Empty params (e.g. the no-op) digest to zero. Otherwise it is
+/// `SHA-256(params)` with the most-significant byte cleared, which guarantees
+/// the value is `< 2^248 <` the BN254 scalar modulus — a canonical field element
+/// with no modular reduction. Both the prover and the on-chain program compute
+/// it with syscall-available primitives, so they agree byte-for-byte.
+pub fn params_digest(params: &[u8]) -> Fr {
+    use ark_ff::PrimeField;
+    if params.is_empty() {
+        return Fr::ZERO;
+    }
+    let mut d: [u8; 32] = sha2::Sha256::digest(params).into();
+    d[0] = 0;
+    Fr::from_be_bytes_mod_order(&d)
+}
+
+/// `action_binding = Poseidon(selector, params_digest(params))` — the value a
+/// proof commits to so it authorizes exactly one action *with these params*.
+/// Mirrors `program::action::action_binding` (the on-chain syscall computes the
+/// identical field element).
+pub fn action_binding(selector: u8, params: &[u8]) -> Fr {
+    hash_pair(Fr::from(selector as u64), params_digest(params))
 }
 
 #[cfg(test)]

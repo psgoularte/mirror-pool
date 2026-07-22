@@ -53,6 +53,8 @@ pub struct PoolConfig {
     /// The membership circuit's Groth16 verifying key, in the flat on-chain
     /// layout parsed by [`crate::verifier::ParsedVerifyingKey`].
     pub verifying_key: [u8; VK_SERIALIZED_LEN],
+    /// 1 while an epoch window is open (actions allowed), 0 otherwise.
+    pub epoch_active: u8,
 }
 
 impl PoolConfig {
@@ -68,7 +70,8 @@ impl PoolConfig {
         + (TREE_DEPTH * 32)
         + (TREE_DEPTH * 32)
         + 8
-        + VK_SERIALIZED_LEN;
+        + VK_SERIALIZED_LEN
+        + 1;
 
     /// Reinterpret an account's bytes as a mutable `PoolConfig` (no copy).
     pub fn load_mut(data: &mut [u8]) -> Result<&mut Self, ProgramError> {
@@ -125,6 +128,32 @@ impl PoolConfig {
         self.filled_subtrees
             .copy_from_slice(&zeros_full[..TREE_DEPTH]);
         self.verifying_key.copy_from_slice(verifying_key);
+        self.epoch_active = 0;
+        Ok(())
+    }
+
+    /// Open a new epoch window (crank). Advances `current_epoch` and marks it
+    /// active, so actions proved against it are accepted. Fails if one is open.
+    pub fn open_epoch(&mut self) -> Result<u64, ProgramError> {
+        if self.epoch_active != 0 {
+            return Err(MirrorPoolError::EpochAlreadyOpen.into());
+        }
+        let next = self
+            .current_epoch()
+            .checked_add(1)
+            .ok_or(ProgramError::from(MirrorPoolError::EpochAlreadyOpen))?;
+        self.current_epoch = next.to_le_bytes();
+        self.epoch_active = 1;
+        Ok(next)
+    }
+
+    /// Close the current epoch window (crank). Actions are then rejected until
+    /// the next `open_epoch`, forcing per-window crowd synchronization.
+    pub fn close_epoch(&mut self) -> Result<(), ProgramError> {
+        if self.epoch_active == 0 {
+            return Err(MirrorPoolError::EpochNotActive.into());
+        }
+        self.epoch_active = 0;
         Ok(())
     }
 

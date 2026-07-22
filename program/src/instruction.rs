@@ -46,6 +46,13 @@ pub enum Instruction {
     /// Internal: the no-op action's CPI target. Only valid when invoked by the
     /// pool PDA (as a signer). Not meant to be called directly.
     NoOpAction,
+
+    /// Crank: open a new epoch window (authority only). Actions are valid only
+    /// while an epoch is open.
+    OpenEpoch,
+
+    /// Crank: close the current epoch window (authority only).
+    CloseEpoch,
 }
 
 impl Instruction {
