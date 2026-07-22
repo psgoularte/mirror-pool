@@ -21,6 +21,9 @@ const G2_LEN: usize = 128;
 /// Flat proof length: `a(64) || b(128) || c(64)`.
 pub const PROOF_LEN: usize = 2 * G1_LEN + G2_LEN;
 const VK_HEADER_LEN: usize = G1_LEN + 3 * G2_LEN;
+/// Exact serialized length of a membership verifying key:
+/// `alpha(64) || beta,gamma,delta(3·128) || ic_len(1) || ic(5·64)`.
+pub const VK_SERIALIZED_LEN: usize = VK_HEADER_LEN + 1 + (NUM_PUBLIC_INPUTS + 1) * G1_LEN;
 
 /// A verifying key parsed from its flat byte layout, owning the IC points so the
 /// borrowed `Groth16Verifyingkey` can reference them.

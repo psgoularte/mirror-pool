@@ -144,6 +144,13 @@ pub fn hash_pair(left: Fr, right: Fr) -> Fr {
     hash(&[left, right]).expect("arity 2 is supported")
 }
 
+/// `action_binding = Poseidon(selector)` — the value a proof commits to so it
+/// authorizes exactly one action. Mirrors `program::action::action_binding`
+/// (the on-chain syscall computes the identical field element).
+pub fn action_binding(selector: u8) -> Fr {
+    commitment(Fr::from(selector as u64))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

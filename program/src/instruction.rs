@@ -6,7 +6,7 @@
 //! `VerifyMembership` staying variant 0.
 
 use crate::error::MirrorPoolError;
-use crate::verifier::{NUM_PUBLIC_INPUTS, PROOF_LEN};
+use crate::verifier::{NUM_PUBLIC_INPUTS, PROOF_LEN, VK_SERIALIZED_LEN};
 use borsh::{BorshDeserialize, BorshSerialize};
 use solana_program::program_error::ProgramError;
 
@@ -24,11 +24,28 @@ pub enum Instruction {
         public_inputs: [[u8; 32]; NUM_PUBLIC_INPUTS],
     },
 
-    /// Create and initialize a pool config PDA with an empty tree of `depth`.
-    InitializePool { depth: u8 },
+    /// Create and initialize a pool config PDA with an empty tree of `depth`
+    /// and the membership circuit's verifying key.
+    InitializePool {
+        depth: u8,
+        verifying_key: [u8; VK_SERIALIZED_LEN],
+    },
 
     /// Insert a commitment leaf into the pool's Merkle tree.
     Deposit { commitment: [u8; 32] },
+
+    /// Verify a membership proof and, if valid and unused this epoch, execute
+    /// the selected action via a PDA-signed CPI. Marks the nullifier.
+    ExecuteAction {
+        proof: [u8; PROOF_LEN],
+        public_inputs: [[u8; 32]; NUM_PUBLIC_INPUTS],
+        action_selector: u8,
+        action_params: Vec<u8>,
+    },
+
+    /// Internal: the no-op action's CPI target. Only valid when invoked by the
+    /// pool PDA (as a signer). Not meant to be called directly.
+    NoOpAction,
 }
 
 impl Instruction {

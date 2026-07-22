@@ -77,3 +77,6 @@ jobs:
 
       - name: end-to-end init + deposit (on-chain root == reference)
         run: cargo run --release --manifest-path bench/Cargo.toml --bin e2e
+
+      - name: full flow (prove → execute_action → nullifier/replay/negatives)
+        run: cargo run --release --manifest-path bench/Cargo.toml --bin flow

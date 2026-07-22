@@ -13,6 +13,7 @@
 
 use crate::error::MirrorPoolError;
 use crate::merkle::{hash_pair, zero_hashes};
+use crate::verifier::VK_SERIALIZED_LEN;
 use bytemuck::{Pod, Zeroable};
 use mirror_pool_common::{ROOT_HISTORY_SIZE, TREE_DEPTH};
 use solana_program::program_error::ProgramError;
@@ -46,6 +47,12 @@ pub struct PoolConfig {
     pub filled_subtrees: [[u8; 32]; TREE_DEPTH],
     /// Empty-subtree hash at each level (constant after init).
     pub zeros: [[u8; 32]; TREE_DEPTH],
+    /// Current epoch id (LE bytes; use [`Self::current_epoch`]). Actions are
+    /// valid only inside their epoch window (advanced by the crank in M6).
+    pub current_epoch: [u8; 8],
+    /// The membership circuit's Groth16 verifying key, in the flat on-chain
+    /// layout parsed by [`crate::verifier::ParsedVerifyingKey`].
+    pub verifying_key: [u8; VK_SERIALIZED_LEN],
 }
 
 impl PoolConfig {
@@ -59,7 +66,9 @@ impl PoolConfig {
         + 32
         + (ROOT_HISTORY_SIZE * 32)
         + (TREE_DEPTH * 32)
-        + (TREE_DEPTH * 32);
+        + (TREE_DEPTH * 32)
+        + 8
+        + VK_SERIALIZED_LEN;
 
     /// Reinterpret an account's bytes as a mutable `PoolConfig` (no copy).
     pub fn load_mut(data: &mut [u8]) -> Result<&mut Self, ProgramError> {
@@ -80,6 +89,10 @@ impl PoolConfig {
         u64::from_le_bytes(self.root_history_index)
     }
 
+    pub fn current_epoch(&self) -> u64 {
+        u64::from_le_bytes(self.current_epoch)
+    }
+
     /// Initialize an empty pool in place. Fails if already initialized or the
     /// depth is unsupported.
     pub fn initialize(
@@ -87,6 +100,7 @@ impl PoolConfig {
         authority: [u8; 32],
         bump: u8,
         depth: u8,
+        verifying_key: &[u8; VK_SERIALIZED_LEN],
     ) -> Result<(), ProgramError> {
         if self.is_initialized != 0 {
             return Err(MirrorPoolError::AlreadyInitialized.into());
@@ -103,12 +117,14 @@ impl PoolConfig {
         self.depth = depth;
         self.next_index = 0u64.to_le_bytes();
         self.root_history_index = 0u64.to_le_bytes();
+        self.current_epoch = 0u64.to_le_bytes();
         self.current_root = zeros_full[TREE_DEPTH];
         self.root_history = [[0u8; 32]; ROOT_HISTORY_SIZE];
         self.root_history[0] = zeros_full[TREE_DEPTH];
         self.zeros.copy_from_slice(&zeros_full[..TREE_DEPTH]);
         self.filled_subtrees
             .copy_from_slice(&zeros_full[..TREE_DEPTH]);
+        self.verifying_key.copy_from_slice(verifying_key);
         Ok(())
     }
 

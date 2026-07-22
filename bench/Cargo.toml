@@ -18,11 +18,17 @@ path = "src/main.rs"
 name = "e2e"
 path = "src/e2e.rs"
 
+[[bin]]
+name = "flow"
+path = "src/flow.rs"
+
 [dependencies]
 litesvm = "0.14"
-# Reference tree/hashing to check the deployed program's root. Pulls arkworks
-# (no Solana deps), so it does not disturb litesvm's Solana graph.
+# Reference tree/hashing + the prover to drive the full flow. These pull
+# arkworks (no Solana deps), so they do not disturb litesvm's Solana graph.
 mirror-pool-common = { path = "../common" }
+mirror-pool-circuit = { path = "../circuit" }
+rand = "0.8"
 solana-address = ">=2.2, <3"
 solana-account = "4"
 solana-instruction = "3"

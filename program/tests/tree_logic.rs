@@ -20,7 +20,10 @@ const AUTHORITY: [u8; 32] = [7u8; 32];
 
 fn new_pool() -> PoolConfig {
     let mut cfg = PoolConfig::zeroed();
-    cfg.initialize(AUTHORITY, 254, TREE_DEPTH as u8).unwrap();
+    // Tree-logic tests never verify proofs, so a zero verifying key is fine.
+    let vk = [0u8; mirror_pool_program::verifier::VK_SERIALIZED_LEN];
+    cfg.initialize(AUTHORITY, 254, TREE_DEPTH as u8, &vk)
+        .unwrap();
     cfg
 }
 

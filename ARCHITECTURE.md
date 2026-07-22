@@ -154,11 +154,42 @@ step; on-chain Poseidon == `common::poseidon`; history eviction; tree-full) and
 a litesvm end-to-end (`bench` `e2e` binary) that runs the real bytecode and
 confirms the on-chain root matches the reference after several deposits.
 
-## Action abstraction *(milestone 6)*
+## execute_action & the nullifier set (milestone 5)
 
-An `Action` trait so a new integration is "implement the trait + register it,"
-not a program rewrite. Extension guide lands here with the first real
-integration.
+`execute_action` is the protocol's core. Given a Groth16 membership proof and
+its public inputs, the program (in order):
+
+1. checks `epoch_id` equals the pool's current epoch (`EpochMismatch`);
+2. checks `merkle_root` is a known recent root (`UnknownRoot`);
+3. checks `action_binding == Poseidon(selector)` for the requested action, so a
+   proof authorizes exactly one action (`ActionBindingMismatch`);
+4. verifies the proof against the pool's embedded verifying key
+   (`ProofVerificationFailed`);
+5. rejects a reused `nullifier_hash` and otherwise creates its marker PDA
+   (`["nullifier", nullifier_hash]`) — one action per membership per epoch
+   (`NullifierAlreadyUsed`);
+6. executes the action via a **PDA-signed CPI**.
+
+**Nullifiers** are one PDA per `nullifier_hash`: existence = spent. This scales
+without a growing central set and makes double-spend a simple "account already
+exists" check. The fee payer is the relayer (any signer), never the member.
+
+## Action abstraction (milestone 5, extended in 6)
+
+The `Action` trait (`program::action`) is the extensibility seam. An action is
+"what the pool PDA does on a member's behalf." Adding an integration means:
+
+1. `impl Action for MyAction` — `selector()` and `execute(&ActionContext)`,
+   where `execute` performs one or more **PDA-signed CPIs** (the pool signs, so
+   the member is never the actor);
+2. add one arm to `action::dispatch`;
+3. define the action's parameter layout and fold it into the action binding.
+
+Milestone 5 ships `NoOpAction` (a self-CPI proving the pool PDA signs) and the
+`no-op` selector. The full flow — initialize → deposit → prove → `execute_action`
+→ replay-rejected, plus tampered-proof / wrong-epoch / action-binding-mismatch
+negatives — runs against the real SBF bytecode in the `bench` `flow` binary.
+Measured: `execute_action` ≈110k CU.
 
 ## Compliance design *(milestone 7)*
 
@@ -178,7 +209,7 @@ summary in the [README](./README.md) is the current placeholder.
 | 2 | Membership circuit (arkworks) + tests | ✅ done |
 | 3 | On-chain Groth16 verification + CU benchmark (~98k CU) | ✅ done |
 | 4 | Merkle tree + `deposit` + root history | ✅ done |
-| 5 | Nullifier set + `execute_action` (no-op CPI) | ⏳ next |
-| 6 | Epochs + relayer + one real integration | ⏳ |
+| 5 | Nullifier set + `execute_action` (no-op CPI) | ✅ done |
+| 6 | Epochs + relayer + one real integration | ⏳ next |
 | 7 | Compliance (viewing keys + screening hook) | ⏳ |
 | 8 | Threat model + docs + demo | ⏳ |

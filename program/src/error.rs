@@ -47,6 +47,27 @@ pub enum MirrorPoolError {
 
     #[error("the account is not owned by this program")]
     InvalidAccountOwner = 12,
+
+    #[error("the proof's merkle root is not a known recent root")]
+    UnknownRoot = 13,
+
+    #[error("the proof's epoch does not match the pool's current epoch")]
+    EpochMismatch = 14,
+
+    #[error("the action binding does not match the requested action")]
+    ActionBindingMismatch = 15,
+
+    #[error("this nullifier has already been used in this epoch")]
+    NullifierAlreadyUsed = 16,
+
+    #[error("the nullifier account does not match the expected PDA")]
+    InvalidNullifierAddress = 17,
+
+    #[error("unknown action selector")]
+    UnknownAction = 18,
+
+    #[error("the pool PDA did not authorize this action")]
+    UnauthorizedActor = 19,
 }
 
 impl From<MirrorPoolError> for ProgramError {
