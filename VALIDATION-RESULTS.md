@@ -48,7 +48,7 @@ attacks the public trace:
 
 - **Fee payer is always the relayer**, never a member (members have no keypair in the action path).
 - **No member signer** on any action tx; **no member-derived account/PDA seed** in the trace.
-- **Effective anonymity set per epoch reported** (e.g. 6 distinct actions among 12 members) and must be > 1; `sim` reports it per epoch.
+- **Effective anonymity set per epoch reported** as **min-entropy effective-k** (`anonymity` crate), per denomination×action-type bucket, **over the association set and over all deposits** — `cli sim` prints both and the Sybil-gap delta (e.g. 16 associated vs 64 all → gap 48), plus the dominance-adjusted figure.
 - **On-chain minimum**: `execute_action` refuses when the lower bound `members − actions_this_epoch < k_min` (`flow`: rejected at set=1<2, accepted at 2≥2).
 
 > ⚠ **Honest limitation:** `k_min` bounds *program-visible* membership, **not**
@@ -79,6 +79,26 @@ attacks the public trace:
 | Amount privacy (denominations) | ✅ | `TransferAction` `DENOMINATIONS`; `flow` `Custom(26)` |
 | Trusted-setup reproducibility | ✅ | committed `setup/verifying_key.solana.bin`; `circuit` `setup_reproducible` |
 | Devnet deploy | ⚠ deferred | localnet real-validator deploy + RPC e2e done; devnet pending faucet funding |
+
+## Addendum v2 — research-grounded anonymity + compliance
+
+| Gate | Status | Evidence |
+|---|---|---|
+| Min-entropy effective-k (`1/max pᵢ`) | ✅ | `anonymity` crate unit tests; `cli sim` |
+| Per-bucket (denomination×action-type), worst bucket | ✅ | `anonymity::measure`; reported by `sim` |
+| Over associated set **and** over all deposits; Sybil-gap delta | ✅ | `sim`: 16 vs 64, gap 48; `sybil_gap_is_reported` test |
+| Dominance/homogeneity adjustment (`k − max-funder`) | ✅ | `dominance_shrinks_effective_k` test |
+| Anonymity Trilemma justification of epochs | ✅ (doc) | ARCHITECTURE "Synchronized rounds & the Anonymity Trilemma" + References |
+| Association-set **inclusion** proof (ZK) | ✅ | `circuit::association` tests; `cli associate` self-verifies; outsider/wrong-root rejected |
+| Association-set **exclusion** | ⚠ off-chain reference only | `SanctionedSet::exclusion_witness` (native); ZK on-chain circuit documented as future work |
+| Selective disclosure (viewing keys) | ✅ | `compliance` binary (from M7) |
+| Citations from primary papers | ✅ | ARCHITECTURE "References" (PET'02, FoSSaCS'09, k/l/t-anonymity, Trilemma S&P'18/PoPETs'20, Privacy Pools'23) |
+
+**Honest scope (unchanged, deepened):** the effective-k figure is a measurement,
+**not** an on-chain guarantee (the on-chain floor is the `k_min` count). The
+association layer makes effective-k meaningful over attested members and
+**narrows** the Sybil gap but does not eliminate it (a corrupt ASP re-introduces
+it). Exclusion is an off-chain reference, not a ZK on-chain proof. No overclaim.
 
 ## External review
 
