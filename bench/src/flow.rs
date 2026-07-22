@@ -17,6 +17,7 @@ use mirror_pool_common::{fr_to_bytes_be, TREE_DEPTH};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use solana_address::Address;
+use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_instruction::{account_meta::AccountMeta, Instruction};
 use solana_keypair::Keypair;
 use solana_message::{Message, VersionedMessage};
@@ -133,7 +134,9 @@ fn main() {
         (proof, limbs)
     };
 
-    // 4) No-op action (member 2): self-CPI proving the pool PDA signs.
+    // 4) No-op action (member 2): self-CPI proving the pool PDA signs. The
+    //    transaction explicitly requests a CU budget (VALIDATION L4) and we
+    //    assert the measured cost stays comfortably under it.
     let (proof, pi) = prove_member(2, epoch, SELECTOR_NOOP, &[]);
     let noop_ix = exec_ix(
         program_id,
@@ -145,7 +148,37 @@ fn main() {
         payer.pubkey(),
         vec![AccountMeta::new_readonly(program_id, false)], // CPI target: self
     );
-    send(&mut svm, &payer, noop_ix, "execute_action(no-op)");
+    const CU_LIMIT: u32 = 300_000;
+    let cu = send_cu(
+        &mut svm,
+        &payer,
+        &[
+            ComputeBudgetInstruction::set_compute_unit_limit(CU_LIMIT),
+            noop_ix,
+        ],
+        "execute_action(no-op)",
+    );
+    if cu >= 200_000 {
+        eprintln!("FAIL: execute_action consumed {cu} CU, over the 200k soft budget");
+        exit(1);
+    }
+    println!("[cu] execute_action = {cu} CU (< 200k soft budget, requested {CU_LIMIT})");
+
+    // Stale/unknown Merkle root: a valid proof carrying a fabricated root is
+    // refused before verification (root check precedes it). VALIDATION L2.
+    let mut stale_pi = pi;
+    stale_pi[0] = [0xAB; 32]; // a root never in the history buffer
+    let stale = exec_ix(
+        program_id,
+        pool,
+        &proof,
+        &stale_pi,
+        SELECTOR_NOOP,
+        &[],
+        payer.pubkey(),
+        vec![AccountMeta::new_readonly(program_id, false)],
+    );
+    expect_reject(&mut svm, &payer, stale, "stale/unknown root", 13);
 
     // 5) Real transfer action (member 0): pool disburses SOL to a recipient,
     //    with the amount+recipient bound into the proof.
@@ -257,9 +290,50 @@ fn main() {
     );
     expect_reject(&mut svm, &payer, closed, "epoch not active", 21);
 
+    // Admin abuse (VALIDATION L5): re-initialization and an unauthorized crank.
+    let mut reinit = vec![1u8, TREE_DEPTH as u8];
+    reinit.extend_from_slice(&vk_bytes);
+    // Prepend a compute-budget ix so this isn't byte-identical to the original
+    // init tx (which would be deduped as already-processed before running).
+    expect_reject_ixs(
+        &mut svm,
+        &payer,
+        &[
+            ComputeBudgetInstruction::set_compute_unit_limit(50_000),
+            Instruction {
+                program_id,
+                accounts: vec![
+                    AccountMeta::new(payer.pubkey(), true),
+                    AccountMeta::new(pool, false),
+                    AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
+                ],
+                data: reinit,
+            },
+        ],
+        "re-initialization",
+        &[6], // AlreadyInitialized
+    );
+
+    let stranger = Keypair::new();
+    svm.airdrop(&stranger.pubkey(), 1_000_000_000).unwrap();
+    expect_reject(
+        &mut svm,
+        &stranger,
+        Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new(pool, false),
+                AccountMeta::new_readonly(stranger.pubkey(), true),
+            ],
+            data: vec![5u8], // OpenEpoch by a non-authority
+        },
+        "unauthorized crank",
+        23, // NotPoolAuthority
+    );
+
     println!(
         "\n=== flow PASS: no-op + real transfer executed via pool PDA; \
-         replay/binding/tampered/wrong-epoch/closed-epoch all rejected ==="
+         replay/binding/tampered/wrong-epoch/closed-epoch/re-init/unauthorized all rejected ==="
     );
 }
 
@@ -301,11 +375,19 @@ fn exec_ix(
 }
 
 fn send(svm: &mut LiteSVM, payer: &Keypair, ix: Instruction, label: &str) {
+    send_cu(svm, payer, &[ix], label);
+}
+
+/// Send one or more instructions; return the compute units consumed.
+fn send_cu(svm: &mut LiteSVM, payer: &Keypair, ixs: &[Instruction], label: &str) -> u64 {
     let blockhash = svm.latest_blockhash();
-    let msg = Message::new_with_blockhash(&[ix], Some(&payer.pubkey()), &blockhash);
+    let msg = Message::new_with_blockhash(ixs, Some(&payer.pubkey()), &blockhash);
     let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[payer]).unwrap();
     match svm.send_transaction(tx) {
-        Ok(meta) => println!("[{label}] ok, {} CU", meta.compute_units_consumed),
+        Ok(meta) => {
+            println!("[{label}] ok, {} CU", meta.compute_units_consumed);
+            meta.compute_units_consumed
+        }
         Err(failed) => {
             eprintln!("FAIL[{label}]: {:?}", failed.err);
             for l in &failed.meta.logs {
@@ -317,7 +399,7 @@ fn send(svm: &mut LiteSVM, payer: &Keypair, ix: Instruction, label: &str) {
 }
 
 fn expect_reject(svm: &mut LiteSVM, payer: &Keypair, ix: Instruction, label: &str, code: u32) {
-    expect_reject_any(svm, payer, ix, label, &[code]);
+    expect_reject_ixs(svm, payer, &[ix], label, &[code]);
 }
 
 fn expect_reject_any(
@@ -327,8 +409,21 @@ fn expect_reject_any(
     label: &str,
     codes: &[u32],
 ) {
+    expect_reject_ixs(svm, payer, &[ix], label, codes);
+}
+
+/// Reject-expecting send over a full instruction list (lets callers prepend a
+/// compute-budget instruction to make an otherwise-identical tx distinct, so it
+/// runs rather than being deduped as already-processed).
+fn expect_reject_ixs(
+    svm: &mut LiteSVM,
+    payer: &Keypair,
+    ixs: &[Instruction],
+    label: &str,
+    codes: &[u32],
+) {
     let blockhash = svm.latest_blockhash();
-    let msg = Message::new_with_blockhash(&[ix], Some(&payer.pubkey()), &blockhash);
+    let msg = Message::new_with_blockhash(ixs, Some(&payer.pubkey()), &blockhash);
     let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[payer]).unwrap();
     match svm.send_transaction(tx) {
         Ok(_) => {

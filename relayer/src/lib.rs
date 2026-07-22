@@ -16,11 +16,16 @@ use mirror_pool_program::verifier::{NUM_PUBLIC_INPUTS, PROOF_LEN};
 use mirror_pool_program::{state::POOL_SEED, NULLIFIER_SEED};
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::{
+    compute_budget::ComputeBudgetInstruction,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     signature::{Signature, Signer},
     transaction::Transaction,
 };
+
+/// CU limit the relayer requests for `execute_action` (verification ~110k;
+/// headroom for Merkle/nullifier/CPI). Well under the 1.4M cap.
+pub const EXECUTE_ACTION_CU_LIMIT: u32 = 300_000;
 
 /// A self-contained relay request: everything needed to submit one
 /// `execute_action`, and nothing that identifies the member. The action's
@@ -121,11 +126,18 @@ pub fn relay(
     job: &RelayJob,
 ) -> Result<Signature> {
     let ix = build_execute_ix(program_id, pool, &relayer.pubkey(), job)?;
+    // Explicitly request the CU budget rather than relying on the default
+    // (VALIDATION L4). The relayer, as fee payer, sets it.
+    let budget = ComputeBudgetInstruction::set_compute_unit_limit(EXECUTE_ACTION_CU_LIMIT);
     let blockhash = rpc
         .get_latest_blockhash()
         .context("fetch recent blockhash")?;
-    let tx =
-        Transaction::new_signed_with_payer(&[ix], Some(&relayer.pubkey()), &[relayer], blockhash);
+    let tx = Transaction::new_signed_with_payer(
+        &[budget, ix],
+        Some(&relayer.pubkey()),
+        &[relayer],
+        blockhash,
+    );
     rpc.send_and_confirm_transaction(&tx)
         .context("submit execute_action")
 }

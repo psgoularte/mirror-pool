@@ -26,6 +26,10 @@ path = "src/flow.rs"
 name = "compliance"
 path = "src/compliance.rs"
 
+[[bin]]
+name = "trace"
+path = "src/trace.rs"
+
 [dependencies]
 litesvm = "0.14"
 # Reference tree/hashing + the prover to drive the full flow. These pull

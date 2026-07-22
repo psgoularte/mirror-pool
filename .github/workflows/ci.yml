@@ -83,3 +83,6 @@ jobs:
 
       - name: compliance (screening hook + selective disclosure)
         run: cargo run --release --manifest-path bench/Cargo.toml --bin compliance
+
+      - name: privacy trace red-team (fee payer, anonymity set, no linkage)
+        run: cargo run --release --manifest-path bench/Cargo.toml --bin trace

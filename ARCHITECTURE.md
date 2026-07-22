@@ -313,6 +313,19 @@ epoch). Double-acting in one epoch is prevented by the nullifier set.
   with thin windows and unique amounts: mitigated, not eliminated.
 - **Compromised trusted setup**: breaks soundness; requires a proper ceremony.
 
+### Assurance status (honesty gate)
+
+- **No formal audit.** This code has not undergone a third-party security audit.
+- **No formal circuit verification.** Circuit soundness is argued by construction
+  and covered by adversarial negative tests (wrong secret, tampered path,
+  stale/unknown root, reused nullifier, action-binding mismatch, wrong epoch —
+  each with a dedicated failing case), but not machine-checked.
+- **Dev trusted setup only.** The keys `cli setup` produces are for local use;
+  production requires a multi-party ceremony that discards the toxic waste.
+- **Minimum anonymity set is not enforced on-chain** (it cannot be — the count of
+  future actions in a window is unknown at execution time). It is surfaced by
+  `sim`/the relayer and must be enforced operationally (keep windows busy).
+
 The honest one-line summary: *mirror-pool hides which member acted, as strongly
 as the pool is large and the epoch window is busy, provided a trusted relayer
 pays the fee.*

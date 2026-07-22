@@ -29,11 +29,16 @@ echo "         execute_action (no-op via PDA + real SOL transfer) -> negatives"
 cargo run --release --manifest-path bench/Cargo.toml --bin flow
 
 echo
-echo "==> 4/5  Compliance: deposit-screening hook + viewing-key disclosure"
+echo "==> 4/6  Compliance: deposit-screening hook + viewing-key disclosure"
 cargo run --release --manifest-path bench/Cargo.toml --bin compliance
 
 echo
-echo "==> 5/5  CLI: keys, and the anonymity-set simulation"
+echo "==> 5/6  Privacy red-team: attack the public trace (fee payer, linkage,"
+echo "         anonymity set) — the headline privacy metric"
+cargo run --release --manifest-path bench/Cargo.toml --bin trace
+
+echo
+echo "==> 6/6  CLI: keys, and the anonymity-set simulation"
 cargo build -q -p mirror-pool-cli
 BIN=target/debug/mirror-pool
 echo "--- keygen (member) ---";  "$BIN" keygen

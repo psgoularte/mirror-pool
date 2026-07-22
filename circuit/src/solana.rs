@@ -248,4 +248,56 @@ mod tests {
         let bytes = vk.to_bytes();
         assert_eq!(SolanaVerifyingKey::from_bytes(&bytes).unwrap(), vk);
     }
+
+    /// VALIDATION L2 "verifier agreement": the SAME proof must verify identically
+    /// off-chain (arkworks `Groth16::verify`) and on-chain (`groth16-solana`).
+    /// A disagreement would reveal an endianness/serialization bug in the
+    /// on-chain path. We also confirm both reject the same tampered input.
+    #[test]
+    fn offchain_and_onchain_verifiers_agree() {
+        use crate::prover::{build_witness, prove, setup, verify};
+        let mut rng = StdRng::seed_from_u64(0x0FF_C0DE);
+        let (pk, vk) = setup(TREE_DEPTH, &mut rng).unwrap();
+
+        let mut tree = MerkleTree::new(TREE_DEPTH);
+        let mut secret = Fr::from(0u64);
+        for i in 0..5u64 {
+            let s = Fr::rand(&mut rng);
+            if i == 2 {
+                secret = s;
+            }
+            tree.insert(poseidon::commitment(s)).unwrap();
+        }
+        let path = tree.proof(2).unwrap();
+        let assignment = build_witness(secret, &path, Fr::from(9u64), Fr::from(0x1234u64)).unwrap();
+        let public = assignment.public_inputs.clone();
+        let proof = prove(&pk, assignment.circuit, &mut rng).unwrap();
+
+        // Off-chain (arkworks) accepts.
+        assert!(
+            verify(&vk, &public, &proof).unwrap(),
+            "off-chain must accept"
+        );
+
+        // On-chain layout (groth16-solana) accepts the identical proof.
+        let sol_vk = vk_to_solana(&vk);
+        let sol_proof = proof_to_solana(&proof);
+        let pib = public.to_bytes();
+        let pi: [[u8; 32]; 4] = [pib[0], pib[1], pib[2], pib[3]];
+        run_solana_verifier(&sol_vk, &sol_proof, &pi).expect("on-chain must accept");
+
+        // Both reject the same tampered public input.
+        let mut bad_public = public.clone();
+        bad_public.epoch_id += Fr::from(1u64);
+        assert!(
+            !verify(&vk, &bad_public, &proof).unwrap(),
+            "off-chain must reject tampered input"
+        );
+        let mut bad_pi = pi;
+        bad_pi[2] = mirror_pool_common::fr_to_bytes_be(&bad_public.epoch_id);
+        assert!(
+            run_solana_verifier(&sol_vk, &sol_proof, &bad_pi).is_err(),
+            "on-chain must reject tampered input"
+        );
+    }
 }
