@@ -6,11 +6,12 @@ protocol. Read this document before deploying anything you care about.
 > **Top-line caveats**
 > 1. **No third-party audit** and **no formal circuit verification** have been
 >    performed.
-> 2. The shipped key comes from a **multi-contributor Phase-2 ceremony** whose
->    contributions were all run on **one machine** — secure if that single
->    operator was honest, plus a base (Phase-1) that rests on the same operator.
->    Suitable for review/testnets, **not** for securing real value. See
->    [Trusted setup](#trusted-setup).
+> 2. The shipped key comes from a Phase-2 ceremony that is now **distributable
+>    and independently verifiable** (`cli verify-setup`), but the committed key
+>    has **exactly 1 independent contributor** (a single operator on one machine)
+>    — so it is secure only if that one operator was honest, and the base
+>    (Phase-1) rests on the same operator. Suitable for review/testnets, **not**
+>    for securing real value. See [Trusted setup](#trusted-setup).
 > 3. Privacy is **probabilistic and behavioral**, and depends on operational
 >    conditions (busy epochs, a trusted relayer). See the
 >    [threat model](../ARCHITECTURE.md#threat-model).
@@ -26,46 +27,63 @@ Groth16 needs a per-circuit trusted setup. The setup's secret randomness ("toxic
 waste") must be destroyed; whoever retains it can forge membership proofs for the
 pool (a **soundness** break — it does not by itself break privacy).
 
-### What ships (multi-contributor Phase-2)
+### What ships (distributable, independently verifiable Phase-2)
 
 `circuit::ceremony` implements a real **multi-contributor Phase-2 MPC**. Each
 contributor re-randomizes the `delta` trapdoor with fresh, non-deterministic
 entropy (`delta_g1,g2 *= s`; the `delta`-divided `l_query`/`h_query` `*= s⁻¹`)
 and publishes a Schnorr proof-of-contribution; a pairing same-ratio check binds
-the `g1`/`g2` updates to one `s`. The composed key is secure **if at least one
-contributor discarded their randomness** — the real Groth16 assurance, replacing
-the earlier forgeable public-seed dev key.
+the `g1`/`g2` updates to one `s`. Each contribution also records its
+**contributor id** (bound into the Fiat–Shamir challenge, so it can't be
+re-attributed) and a **prior-state hash** chaining it to its predecessor. The
+composed key is secure **if at least one contributor discarded their randomness**.
 
-The committed ceremony lives in `setup/` (verifying key + `transcript/`).
-`circuit/tests/trusted_setup.rs` **verifies the whole contribution chain**, pins
-the transcript by SHA-256, and confirms the committed on-chain VK is the
-ceremony output. Correctness of the `delta` update is gated by a full prove+
-verify with the multi-contributed key
+**Distributable.** The ceremony can be run across **independent operators** with
+no shared secret: `ceremony-init` publishes base params + an empty transcript;
+each operator runs `ceremony-contribute` (fetch params + transcript, inject fresh
+OS entropy, emit a PoK, publish the updated params + transcript) — passing only
+public data to the next; `ceremony-finalize` derives the verifying key. See
+[`circuit.md`](./circuit.md) for the commands.
+
+**Independently verifiable.** Anyone can check the whole chain from public data
+(transcript + verifying key) with **`cli verify-setup`** — it runs every
+same-ratio and Schnorr check, confirms the chain produces the committed key,
+prints each contributor and the **independent-contributor count**, and prints the
+transcript hash. `circuit/tests/trusted_setup.rs` additionally pins that hash by
+SHA-256 and asserts the independent count. Correctness of the `delta` update is
+gated by a full prove+verify with the multi-contributed key
 (`ceremony::tests::ceremony_key_still_proves_and_verifies`).
 
-### What it does NOT yet cover
+### Independent contributors in the shipped key: **1** (single operator)
 
-- **Single-operator contributions.** The shipped ceremony's contributions were
-  all run on one machine (via `cli setup`), so it is only as honest as that one
-  operator. A production ceremony coordinates contributions across **independent**
-  parties, each publishing their contribution for public verification.
-- **Phase-2 only.** The ceremony re-randomizes `delta`; `alpha, beta, gamma, tau`
-  come from the base arkworks setup and rest on that base's entropy being
+The committed key in `setup/` has **exactly one independent contribution**, from:
+
+- `mirror-pool-maintainer (single operator, one machine, 2026-07)` — id
+  `e8844a74…68af4428`.
+
+**Running N contributions yourself on one machine does not upgrade this** — one
+operator who saw all the entropy is cryptographically a single-party setup, so we
+ship (and count) exactly one. The **precise assurance** is therefore: *secure iff
+that one contributor was honest and discarded their entropy* — i.e. currently
+"trust the maintainer." That is why the key stays **testnet-grade**. The win of
+this pass is the *verifiable, distributable ceremony infrastructure* and the
+accurate count, **not** a larger number.
+
+### What remains for production
+
+- **More independent contributors.** Have genuinely separate parties each run
+  `ceremony-contribute` and publish their contribution; the assurance strengthens
+  to "≥1 of *these* independent parties was honest." The tooling supports this
+  today — only independent operators are missing.
+- **Public Phase-1.** The ceremony re-randomizes `delta`; `alpha, beta, gamma,
+  tau` come from the base arkworks setup and rest on that base's entropy being
   discarded. The arkworks stack does **not** ingest an external `.ptau`, so a
-  universal public **Phase-1** powers-of-tau is not wired in — that remains the
-  production requirement. We do not fake it.
+  universal public **Phase-1** powers-of-tau is not wired in. We do not fake it.
+- **Published attestations.** Contributor ids are recorded and bound; signed
+  human attestations per contribution are a straightforward future addition.
 
-### Production ceremony path (before mainnet)
-
-1. **Phase 1 (universal).** Start from a public powers-of-tau transcript (e.g.
-   the Perpetual Powers of Tau), published and independently verified.
-2. **Phase 2 (this circuit).** Run the `circuit::ceremony` contributions across
-   **independent** machines/parties, each publishing their contribution.
-3. **Verify + pin.** Publish the transcript; independent parties run
-   `trusted_setup` to verify the chain; pin the transcript hash in that test.
-
-Until independent multi-party contributions and a public Phase-1 are in place,
-treat every pool as a testnet demo.
+Until there are multiple independent contributors and a public Phase-1, treat
+every pool as a testnet demo.
 
 ## Threat model
 

@@ -9,10 +9,18 @@
 //! 3. confirm the committed on-chain verifying key is exactly the ceremony's
 //!    output.
 //!
-//! Regenerate the committed ceremony with:
-//! `cargo run -p mirror-pool-cli -- setup --out-dir setup --contributions 3`
-//! (then move `transcript.bin` under `setup/transcript/`, drop `proving_key.bin`,
-//! and update `PINNED_TRANSCRIPT_HASH` below to the printed hash).
+//! Regenerate the committed ceremony with the distributable flow (each step can
+//! run on a different machine / operator):
+//! ```text
+//! cli ceremony-init --out-dir ceremony
+//! cli ceremony-contribute --params ceremony/params.bin \
+//!     --transcript ceremony/transcript.bin --contributor <label> --out-dir ceremony
+//! # …repeat ceremony-contribute for each INDEPENDENT operator…
+//! cli ceremony-finalize --params ceremony/params.bin \
+//!     --transcript ceremony/transcript.bin --out-dir setup
+//! ```
+//! then update `PINNED_TRANSCRIPT_HASH` below to the printed hash. Anyone can
+//! re-check the committed result with `cli verify-setup`.
 
 use ark_bn254::Bn254;
 use ark_groth16::VerifyingKey;
@@ -36,8 +44,8 @@ const TRANSCRIPT: &[u8] = include_bytes!(concat!(
 /// SHA-256 of the committed transcript (printed by `cli setup`). Pinning here —
 /// not in a file — is what stops the transcript from being swapped.
 const PINNED_TRANSCRIPT_HASH: [u8; 32] = [
-    0x96, 0xcb, 0x28, 0x10, 0xb2, 0xc3, 0xab, 0xd2, 0x40, 0x3a, 0x63, 0xfb, 0x74, 0xbe, 0x17, 0x78,
-    0xc7, 0xbf, 0x05, 0x17, 0x22, 0x8f, 0x6e, 0xe4, 0xb9, 0xc0, 0x32, 0x22, 0x1c, 0x13, 0xf6, 0xe6,
+    0xd9, 0xeb, 0xc2, 0x4c, 0xff, 0x84, 0x0a, 0xc0, 0xaf, 0x8b, 0x52, 0xe6, 0x00, 0x73, 0x0f, 0x9a,
+    0x65, 0x0e, 0x25, 0x44, 0x20, 0x2c, 0x33, 0x27, 0x13, 0x7e, 0x09, 0x29, 0x52, 0xaf, 0x21, 0x4e,
 ];
 
 #[test]
@@ -64,4 +72,12 @@ fn committed_setup_is_a_valid_ceremony() {
     );
     // At least one real contribution (a ceremony, not a single-party setup).
     assert!(!transcript.contributions.is_empty());
+    // Honest labeling: the shipped key has exactly ONE independent contributor
+    // (single operator, one machine). This is the testnet-grade status stated in
+    // docs/security.md — do NOT bump this without genuinely independent parties.
+    assert_eq!(
+        transcript.independent_contributors(),
+        1,
+        "shipped ceremony is single-operator; update docs + count together if that changes"
+    );
 }

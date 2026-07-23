@@ -82,7 +82,7 @@ attacks the public trace:
 | Benchmark instruction removed from deployed artifact | ✅ | `#[cfg(feature="bench")]`; `verify_membership_absent_from_default_build` |
 | On-chain minimum anonymity set (`k_min`) | ✅ | `flow` reject@1<2 / accept@2≥2; metric + limits in ARCHITECTURE |
 | Amount privacy (denominations) | ✅ | `TransferAction` `DENOMINATIONS`; `flow` `Custom(26)` |
-| Trusted setup — multi-contributor Phase-2 ceremony | ✅ | `circuit::ceremony` MPC; `circuit` `trusted_setup` verifies the chain, pins the transcript hash, confirms committed VK; `ceremony_key_still_proves_and_verifies` |
+| Trusted setup — distributable, independently verifiable Phase-2 | ✅ | `circuit::ceremony` MPC (contributor id bound into the PoK + prior-state hash chaining); `cli ceremony-init/contribute/finalize` distribute it, `cli verify-setup` checks the chain from public data; `circuit` `trusted_setup` pins the transcript hash **and asserts independent-contributor count = 1**; `distinct_contributors_are_counted_independently`, `reattributing_a_contribution_is_rejected`, `ceremony_key_still_proves_and_verifies`. **Shipped key = 1 independent contributor (single operator) → testnet-grade.** |
 | Devnet deploy | ✅ | live program id `4YrUSMP2gG9v9SJAgQPNYpzvUSxqWVBBQwdc7g52xYPe` on devnet; localnet real-validator deploy + RPC e2e |
 
 ## Addendum v2 — research-grounded anonymity + compliance

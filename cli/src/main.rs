@@ -16,11 +16,14 @@
 //! network. `init-pool`, `deposit`, `crank`, and `execute` take an RPC endpoint.
 
 use anyhow::{anyhow, Context, Result};
-use ark_bn254::Fr;
+use ark_bn254::{Bn254, Fr};
+use ark_groth16::{ProvingKey, VerifyingKey};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use clap::{Parser, Subcommand};
-use mirror_pool_circuit::ceremony::run_ceremony;
+use mirror_pool_circuit::ceremony::{
+    base_setup, contribute, contributor_id, run_ceremony, verify_transcript, Transcript,
+};
 use mirror_pool_circuit::prover::{build_witness, prove, PublicInputs};
 use mirror_pool_circuit::solana::{proof_to_solana, vk_to_solana};
 use mirror_pool_common::compliance::{seal_disclosure, ViewingKeypair};
@@ -58,6 +61,53 @@ enum Command {
         /// these across independent parties.
         #[arg(long, default_value_t = 3)]
         contributions: usize,
+    },
+    /// Ceremony (distributable) — step 1: create the base params + an empty
+    /// transcript that independent operators then extend. Publishes
+    /// `params.bin` + `transcript.bin` (public — they carry no secret).
+    CeremonyInit {
+        #[arg(long, default_value = "ceremony")]
+        out_dir: PathBuf,
+    },
+    /// Ceremony (distributable) — step 2: as an **external** operator, add ONE
+    /// contribution with fresh OS entropy (re-randomize delta, emit a Schnorr
+    /// PoK) and publish the updated `params.bin` + `transcript.bin`. Needs no
+    /// one else's secret; your entropy lives only in this process and is gone
+    /// when it exits.
+    CeremonyContribute {
+        /// Current params from the previous step/contributor.
+        #[arg(long)]
+        params: PathBuf,
+        /// Current transcript from the previous step/contributor.
+        #[arg(long)]
+        transcript: PathBuf,
+        /// Your public identifier: a label, or a 64-char hex 32-byte pubkey.
+        #[arg(long)]
+        contributor: String,
+        #[arg(long, default_value = "ceremony")]
+        out_dir: PathBuf,
+    },
+    /// Ceremony (distributable) — step 3: finalize. Derive the verifying keys
+    /// from the contributed params, verify the whole chain, and print the
+    /// transcript hash to pin. Writes `verifying_key.bin`, `vk_solana.bin`, and
+    /// `transcript/transcript.bin`.
+    CeremonyFinalize {
+        #[arg(long)]
+        params: PathBuf,
+        #[arg(long)]
+        transcript: PathBuf,
+        #[arg(long, default_value = "setup")]
+        out_dir: PathBuf,
+    },
+    /// Verify a ceremony end-to-end from PUBLIC data only (transcript +
+    /// verifying key): every same-ratio + Schnorr check, and that the chain
+    /// produces the committed key. Prints each contributor and the independent
+    /// count. Anyone can run this.
+    VerifySetup {
+        #[arg(long, default_value = "setup/transcript/transcript.bin")]
+        transcript: PathBuf,
+        #[arg(long, default_value = "setup/verifying_key.bin")]
+        verifying_key: PathBuf,
     },
     /// Generate a member secret, or (with --auditor) a viewing keypair.
     Keygen {
@@ -198,6 +248,22 @@ fn main() -> Result<()> {
             out_dir,
             contributions,
         } => cmd_setup(&out_dir, contributions),
+        Command::CeremonyInit { out_dir } => cmd_ceremony_init(&out_dir),
+        Command::CeremonyContribute {
+            params,
+            transcript,
+            contributor,
+            out_dir,
+        } => cmd_ceremony_contribute(&params, &transcript, &contributor, &out_dir),
+        Command::CeremonyFinalize {
+            params,
+            transcript,
+            out_dir,
+        } => cmd_ceremony_finalize(&params, &transcript, &out_dir),
+        Command::VerifySetup {
+            transcript,
+            verifying_key,
+        } => cmd_verify_setup(&transcript, &verifying_key),
         Command::Keygen { auditor } => cmd_keygen(auditor),
         Command::Prove {
             proving_key,
@@ -314,6 +380,182 @@ fn cmd_setup(out_dir: &Path, contributions: usize) -> Result<()> {
         "⚠  This ran all contributions on ONE machine, so it is only as honest as \
          this operator. A real deployment coordinates contributions across \
          INDEPENDENT parties (and adds a public Phase-1). See docs/security.md."
+    );
+    Ok(())
+}
+
+/// Parse a contributor identifier: a 64-char hex string is taken as a raw
+/// 32-byte pubkey; anything else is hashed into a stable id via `contributor_id`.
+fn parse_contributor(s: &str) -> [u8; 32] {
+    let t = s.trim().trim_start_matches("0x");
+    if t.len() == 64 {
+        if let Ok(bytes) = hex::decode(t) {
+            if let Ok(arr) = <[u8; 32]>::try_from(bytes.as_slice()) {
+                return arr;
+            }
+        }
+    }
+    contributor_id(s)
+}
+
+fn read_pk(path: &Path) -> Result<ProvingKey<Bn254>> {
+    let bytes = std::fs::read(path).with_context(|| format!("read params {}", path.display()))?;
+    ProvingKey::<Bn254>::deserialize_compressed(&bytes[..])
+        .map_err(|e| anyhow!("deserialize params: {e}"))
+}
+
+fn write_params(pk: &ProvingKey<Bn254>, path: &Path) -> Result<()> {
+    let mut bytes = Vec::new();
+    pk.serialize_compressed(&mut bytes)
+        .map_err(|e| anyhow!("serialize params: {e}"))?;
+    std::fs::write(path, &bytes).with_context(|| format!("write {}", path.display()))?;
+    Ok(())
+}
+
+/// Ceremony step 1: base params + empty transcript for contributors to extend.
+fn cmd_ceremony_init(out_dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(out_dir).context("create out dir")?;
+    eprintln!("generating base params (depth {TREE_DEPTH}) with OS entropy…");
+    let mut rng = OsRng;
+    let (pk, _vk) = base_setup(&mut rng).map_err(|e| anyhow!("base setup: {e}"))?;
+    let transcript = Transcript {
+        base_delta_g1: pk.delta_g1,
+        base_delta_g2: pk.vk.delta_g2,
+        contributions: vec![],
+    };
+    write_params(&pk, &out_dir.join("params.bin"))?;
+    std::fs::write(
+        out_dir.join("transcript.bin"),
+        transcript
+            .to_bytes()
+            .map_err(|e| anyhow!("transcript: {e}"))?,
+    )?;
+    println!(
+        "wrote params.bin + transcript.bin to {} (0 contributions).",
+        out_dir.display()
+    );
+    println!(
+        "Publish both. Each INDEPENDENT operator runs `ceremony-contribute` in turn, \
+         then `ceremony-finalize` derives the key. Independent parties are what make \
+         the '≥1 honest' guarantee real."
+    );
+    Ok(())
+}
+
+/// Ceremony step 2: add one contribution as an external operator.
+fn cmd_ceremony_contribute(
+    params: &Path,
+    transcript: &Path,
+    contributor: &str,
+    out_dir: &Path,
+) -> Result<()> {
+    std::fs::create_dir_all(out_dir).context("create out dir")?;
+    let mut pk = read_pk(params)?;
+    let bytes = std::fs::read(transcript).context("read transcript")?;
+    let mut t = Transcript::from_bytes(&bytes).map_err(|e| anyhow!("parse transcript: {e}"))?;
+
+    // The params must be exactly the transcript's current head, and the chain so
+    // far must verify — otherwise we would be building on an inconsistent state.
+    let (head_g1, head_g2) = t.head();
+    if pk.delta_g1 != head_g1 || pk.vk.delta_g2 != head_g2 {
+        return Err(anyhow!(
+            "params do not match the transcript head — mismatched or corrupted inputs"
+        ));
+    }
+    if !t.contributions.is_empty() && !verify_transcript(&t, &pk.vk) {
+        return Err(anyhow!(
+            "the transcript received does not verify; refusing to extend it"
+        ));
+    }
+
+    let id = parse_contributor(contributor);
+    eprintln!("contributing with fresh OS entropy (discarded on exit)…");
+    let mut rng = OsRng;
+    let c = contribute(&mut pk, id, &mut rng);
+    t.contributions.push(c);
+
+    write_params(&pk, &out_dir.join("params.bin"))?;
+    std::fs::write(
+        out_dir.join("transcript.bin"),
+        t.to_bytes().map_err(|e| anyhow!("transcript: {e}"))?,
+    )?;
+    println!(
+        "contribution added (contributor {}). Chain now has {} contribution(s), {} independent.",
+        hex::encode(id),
+        t.contributions.len(),
+        t.independent_contributors()
+    );
+    println!("transcript hash: {}", hex::encode(t.hash()));
+    println!("Pass params.bin + transcript.bin to the next INDEPENDENT operator, or finalize.");
+    Ok(())
+}
+
+/// Ceremony step 3: derive + verify the verifying key from the contributed params.
+fn cmd_ceremony_finalize(params: &Path, transcript: &Path, out_dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(out_dir.join("transcript")).context("create out dir")?;
+    let pk = read_pk(params)?;
+    let bytes = std::fs::read(transcript).context("read transcript")?;
+    let t = Transcript::from_bytes(&bytes).map_err(|e| anyhow!("parse transcript: {e}"))?;
+
+    if !verify_transcript(&t, &pk.vk) {
+        return Err(anyhow!(
+            "transcript does not verify against these params — refusing to finalize"
+        ));
+    }
+    let vk = pk.vk.clone();
+    let mut vk_bytes = Vec::new();
+    vk.serialize_compressed(&mut vk_bytes)
+        .map_err(|e| anyhow!("serialize vk: {e}"))?;
+    std::fs::write(out_dir.join("verifying_key.bin"), &vk_bytes)?;
+    std::fs::write(
+        out_dir.join("verifying_key.solana.bin"),
+        vk_to_solana(&vk).to_bytes(),
+    )?;
+    std::fs::write(
+        out_dir.join("transcript").join("transcript.bin"),
+        t.to_bytes().map_err(|e| anyhow!("transcript: {e}"))?,
+    )?;
+    println!(
+        "finalized: wrote verifying_key.bin, verifying_key.solana.bin, transcript/transcript.bin to {}",
+        out_dir.display()
+    );
+    println!(
+        "contributions: {}, independent contributors: {}",
+        t.contributions.len(),
+        t.independent_contributors()
+    );
+    println!("transcript hash (pin this): {}", hex::encode(t.hash()));
+    Ok(())
+}
+
+/// Verify a ceremony end-to-end from public data (transcript + verifying key).
+fn cmd_verify_setup(transcript: &Path, verifying_key: &Path) -> Result<()> {
+    let vk_bytes = std::fs::read(verifying_key).context("read verifying key")?;
+    let vk = VerifyingKey::<Bn254>::deserialize_compressed(&vk_bytes[..])
+        .map_err(|e| anyhow!("deserialize verifying key: {e}"))?;
+    let bytes = std::fs::read(transcript).context("read transcript")?;
+    let t = Transcript::from_bytes(&bytes).map_err(|e| anyhow!("parse transcript: {e}"))?;
+
+    println!(
+        "ceremony transcript: {} contribution(s)",
+        t.contributions.len()
+    );
+    for (i, c) in t.contributions.iter().enumerate() {
+        println!("  #{i}: contributor {}", hex::encode(c.contributor));
+    }
+    let ok = verify_transcript(&t, &vk);
+    if !ok {
+        return Err(anyhow!(
+            "VERIFY FAILED: the transcript chain does not verify against this verifying key"
+        ));
+    }
+    println!("chain verifies ✓ (every same-ratio + Schnorr PoK check passed)");
+    println!("independent contributors: {}", t.independent_contributors());
+    println!("transcript hash: {}", hex::encode(t.hash()));
+    println!(
+        "Assurance: secure iff ≥1 of the {} independent contributor(s) was honest and \
+         discarded their entropy.",
+        t.independent_contributors()
     );
     Ok(())
 }

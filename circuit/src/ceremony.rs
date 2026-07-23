@@ -45,10 +45,23 @@ use mirror_pool_common::TREE_DEPTH;
 use rand::{CryptoRng, RngCore};
 use sha2::{Digest, Sha256};
 
-/// A single Phase-2 contribution: the updated `delta` in both groups plus a
-/// Schnorr proof of knowledge of the secret multiplier `s`.
+/// A single Phase-2 contribution: who made it, the state it built on, the
+/// updated `delta` in both groups, and a Schnorr proof of knowledge of the
+/// secret multiplier `s`.
+///
+/// The `contributor` identifier is **cryptographically bound** into the Schnorr
+/// challenge, so a recorded contribution cannot be re-attributed to a different
+/// identity without invalidating its proof. `prev_state_hash` chains each
+/// contribution explicitly to its predecessor's state (defence in depth on top
+/// of the pairing same-ratio check), making the transcript tamper-evident.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct Contribution {
+    /// Public identifier of the contributor (e.g. `contributor_id("alice")` or a
+    /// 32-byte pubkey). Bound into the PoK challenge — not free-form metadata.
+    pub contributor: [u8; 32],
+    /// `state_hash` of the state this contribution built on (`prev_delta` in both
+    /// groups). Must equal the running state during verification.
+    pub prev_state_hash: [u8; 32],
     /// `s · prev_delta_g1`.
     pub new_delta_g1: G1Affine,
     /// `s · prev_delta_g2`.
@@ -57,6 +70,41 @@ pub struct Contribution {
     pub pok_r: G1Affine,
     /// Schnorr response `u = r + c·s`.
     pub pok_u: Fr,
+}
+
+/// A stable 32-byte contributor identifier derived from a human label. External
+/// operators may instead supply a real 32-byte public key.
+pub fn contributor_id(label: &str) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(b"mirror-pool/phase2/contributor/v1");
+    h.update(label.as_bytes());
+    h.finalize().into()
+}
+
+/// The identifier used for a **self-run** (single-operator) contribution. Every
+/// contribution in a one-shot [`run_ceremony`] carries this id, so the transcript
+/// is honest that they share one operator — running N of them does not add
+/// independent parties.
+pub fn self_operator_id() -> [u8; 32] {
+    contributor_id("self-operator (single machine)")
+}
+
+/// SHA-256 of a `delta` state (both groups) — the value each contribution pins
+/// its predecessor to.
+fn state_hash(delta_g1: &G1Affine, delta_g2: &G2Affine) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(b"mirror-pool/phase2/state/v1");
+    let mut b = Vec::new();
+    delta_g1
+        .serialize_compressed(&mut b)
+        .expect("g1 serializes");
+    h.update(&b);
+    b.clear();
+    delta_g2
+        .serialize_compressed(&mut b)
+        .expect("g2 serializes");
+    h.update(&b);
+    h.finalize().into()
 }
 
 /// The public ceremony transcript: the base `delta` (in both groups) and the
@@ -93,12 +141,39 @@ impl Transcript {
     pub fn from_bytes(bytes: &[u8]) -> crate::error::Result<Self> {
         Self::deserialize_compressed(bytes).map_err(|e| CircuitError::Serialize(e.to_string()))
     }
+
+    /// The current head `delta` (both groups): the last contribution's output, or
+    /// the base if there are no contributions yet. A contributor's params must
+    /// match this before they extend the chain.
+    pub fn head(&self) -> (G1Affine, G2Affine) {
+        match self.contributions.last() {
+            Some(c) => (c.new_delta_g1, c.new_delta_g2),
+            None => (self.base_delta_g1, self.base_delta_g2),
+        }
+    }
+
+    /// Number of **distinct** contributor identifiers in the chain. This is the
+    /// honest independent-contributor count: several contributions sharing one id
+    /// (a self-run) count as **one**, because that operator saw all their entropy.
+    pub fn independent_contributors(&self) -> usize {
+        let mut ids: Vec<[u8; 32]> = self.contributions.iter().map(|c| c.contributor).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids.len()
+    }
 }
 
-/// Fiat–Shamir challenge for the Schnorr PoK, bound to the statement.
-fn challenge(prev_delta_g1: &G1Affine, new_delta_g1: &G1Affine, r: &G1Affine) -> Fr {
+/// Fiat–Shamir challenge for the Schnorr PoK, bound to the statement **and** the
+/// contributor id (so a contribution cannot be re-attributed to another party).
+fn challenge(
+    prev_delta_g1: &G1Affine,
+    new_delta_g1: &G1Affine,
+    r: &G1Affine,
+    contributor: &[u8; 32],
+) -> Fr {
     let mut h = Sha256::new();
-    h.update(b"mirror-pool/phase2/pok/v1");
+    h.update(b"mirror-pool/phase2/pok/v2");
+    h.update(contributor);
     for p in [prev_delta_g1, new_delta_g1, r] {
         let mut b = Vec::new();
         p.serialize_compressed(&mut b).expect("point serializes");
@@ -116,9 +191,13 @@ pub fn base_setup<R: RngCore + CryptoRng>(
 }
 
 /// Apply one Phase-2 contribution to `pk` (updating its `vk` too), returning the
-/// public contribution. Uses fresh entropy from `rng` — the caller must discard
-/// it for the contribution to add security.
-pub fn contribute<R: RngCore + CryptoRng>(pk: &mut ProvingKey<Bn254>, rng: &mut R) -> Contribution {
+/// public contribution attributed to `contributor`. Uses fresh entropy from
+/// `rng` — the caller must discard it for the contribution to add security.
+pub fn contribute<R: RngCore + CryptoRng>(
+    pk: &mut ProvingKey<Bn254>,
+    contributor: [u8; 32],
+    rng: &mut R,
+) -> Contribution {
     // Fresh, nonzero delta multiplier.
     let mut s = Fr::rand(rng);
     while s.is_zero() {
@@ -127,6 +206,8 @@ pub fn contribute<R: RngCore + CryptoRng>(pk: &mut ProvingKey<Bn254>, rng: &mut 
     let s_inv = s.inverse().expect("nonzero");
 
     let prev_delta_g1 = pk.delta_g1;
+    let prev_delta_g2 = pk.vk.delta_g2;
+    let prev_state_hash = state_hash(&prev_delta_g1, &prev_delta_g2);
 
     // delta *= s in both groups; delta-divided queries *= s⁻¹.
     pk.delta_g1 = (pk.delta_g1 * s).into_affine();
@@ -141,10 +222,12 @@ pub fn contribute<R: RngCore + CryptoRng>(pk: &mut ProvingKey<Bn254>, rng: &mut 
     // Schnorr PoK of s on base prev_delta_g1: R = r·B, u = r + c·s.
     let r = Fr::rand(rng);
     let pok_r = (prev_delta_g1 * r).into_affine();
-    let c = challenge(&prev_delta_g1, &pk.delta_g1, &pok_r);
+    let c = challenge(&prev_delta_g1, &pk.delta_g1, &pok_r, &contributor);
     let pok_u = r + c * s;
 
     Contribution {
+        contributor,
+        prev_state_hash,
         new_delta_g1: pk.delta_g1,
         new_delta_g2: pk.vk.delta_g2,
         pok_r,
@@ -163,8 +246,12 @@ pub fn verify_contribution(
     if c.new_delta_g1 == *prev_delta_g1 {
         return false; // no-op contribution adds nothing
     }
+    // The contribution must be pinned to exactly this predecessor state.
+    if c.prev_state_hash != state_hash(prev_delta_g1, prev_delta_g2) {
+        return false;
+    }
     // Schnorr: u·B == R + c·new, with B = prev_delta_g1, new = s·B.
-    let ch = challenge(prev_delta_g1, &c.new_delta_g1, &c.pok_r);
+    let ch = challenge(prev_delta_g1, &c.new_delta_g1, &c.pok_r, &c.contributor);
     let lhs = (*prev_delta_g1 * c.pok_u).into_affine();
     let rhs = (c.pok_r.into_group() + c.new_delta_g1 * ch).into_affine();
     if lhs != rhs {
@@ -209,11 +296,14 @@ pub fn run_ceremony<R: RngCore + CryptoRng>(
     let base_delta_g1 = pk.delta_g1;
     let base_delta_g2 = pk.vk.delta_g2;
 
+    // One-shot self-run: every contribution shares the single-operator id, so the
+    // transcript never overstates how many independent parties took part.
+    let id = self_operator_id();
     let mut contributions = Vec::with_capacity(num_contributions);
     let mut prev_g1 = base_delta_g1;
     let mut prev_g2 = base_delta_g2;
     for _ in 0..num_contributions {
-        let c = contribute(&mut pk, rng);
+        let c = contribute(&mut pk, id, rng);
         // Sanity: each contribution must verify against the prior state.
         debug_assert!(verify_contribution(&prev_g1, &prev_g2, &c));
         prev_g1 = c.new_delta_g1;
@@ -291,5 +381,53 @@ mod tests {
         let bytes = t.to_bytes().unwrap();
         let t2 = Transcript::from_bytes(&bytes).unwrap();
         assert_eq!(t.hash(), t2.hash());
+    }
+
+    /// Build a transcript one distinct contributor at a time (the distributable
+    /// flow) and confirm the independent-contributor count reflects distinct ids.
+    #[test]
+    fn distinct_contributors_are_counted_independently() {
+        let mut rng = StdRng::seed_from_u64(0xABCD);
+        let (mut pk, _vk) = base_setup(&mut rng).unwrap();
+        let mut t = Transcript {
+            base_delta_g1: pk.delta_g1,
+            base_delta_g2: pk.vk.delta_g2,
+            contributions: vec![],
+        };
+        for label in ["alice", "bob", "carol"] {
+            let (g1, g2) = t.head();
+            let c = contribute(&mut pk, contributor_id(label), &mut rng);
+            assert!(verify_contribution(&g1, &g2, &c));
+            t.contributions.push(c);
+        }
+        assert!(verify_transcript(&t, &pk.vk));
+        assert_eq!(t.independent_contributors(), 3);
+
+        // Three contributions from ONE self operator count as one independent party.
+        let (_pk2, vk2, t2) = run_ceremony(3, &mut rng).unwrap();
+        assert!(verify_transcript(&t2, &vk2));
+        assert_eq!(t2.contributions.len(), 3);
+        assert_eq!(t2.independent_contributors(), 1);
+    }
+
+    /// Re-attributing a contribution to a different id must break its PoK (the id
+    /// is bound into the Fiat–Shamir challenge).
+    #[test]
+    fn reattributing_a_contribution_is_rejected() {
+        let mut rng = StdRng::seed_from_u64(0x1D);
+        let (_pk, vk, mut t) = run_ceremony(1, &mut rng).unwrap();
+        assert!(verify_transcript(&t, &vk));
+        t.contributions[0].contributor = contributor_id("impostor");
+        assert!(!verify_transcript(&t, &vk));
+    }
+
+    /// Tampering the recorded prior-state hash is rejected.
+    #[test]
+    fn tampered_prev_state_hash_is_rejected() {
+        let mut rng = StdRng::seed_from_u64(0x2E);
+        let (_pk, vk, mut t) = run_ceremony(2, &mut rng).unwrap();
+        assert!(verify_transcript(&t, &vk));
+        t.contributions[1].prev_state_hash[0] ^= 0xFF;
+        assert!(!verify_transcript(&t, &vk));
     }
 }

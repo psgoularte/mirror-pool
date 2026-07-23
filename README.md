@@ -182,7 +182,16 @@ BIN=target/debug/mirror-pool
 # Trusted setup: a multi-contributor Phase-2 ceremony (writes proving/verifying
 # keys + on-chain VK bytes + a transcript). Each contribution injects fresh
 # entropy; the key is secure if ≥1 contributor was honest.
-$BIN setup --out-dir artifacts --contributions 3
+$BIN setup --out-dir artifacts --contributions 3   # one-shot, single-operator
+
+# …or run it distributably across INDEPENDENT operators (no shared secret), and
+# let anyone verify the whole chain from public data:
+$BIN ceremony-init --out-dir ceremony
+$BIN ceremony-contribute --params ceremony/params.bin \
+     --transcript ceremony/transcript.bin --contributor "alice" --out-dir ceremony
+$BIN ceremony-finalize --params ceremony/params.bin \
+     --transcript ceremony/transcript.bin --out-dir setup
+$BIN verify-setup    # checks every step + prints the independent-contributor count
 
 # A member generates a secret and deposits its commitment.
 $BIN keygen                       # -> secret + commitment
@@ -284,9 +293,12 @@ rewrite. Full guide in
 ## Security & assurance
 
 mirror-pool is **unaudited** and provides **probabilistic** privacy. Its
-verifying key comes from a **multi-contributor Phase-2 ceremony** that was run
-**single-operator** with no external Phase-1 — secure if ≥1 contributor was
-honest, but treat every pool as testnet-grade. Read
+verifying key comes from a Phase-2 ceremony that is now **distributable and
+independently verifiable** (`cli verify-setup` checks the whole chain from public
+data), but the committed key has **exactly 1 independent contributor** (a single
+operator, one machine) and no external Phase-1 — secure only if that one operator
+was honest, so treat every pool as **testnet-grade**. Adding genuinely
+independent contributors (the tooling supports it) is what strengthens this. Read
 [`docs/security.md`](./docs/security.md) before deploying anything of value — it
 covers the trusted-setup ceremony, the threat model, and the review findings. In
 particular, `k_min` bounds *program-visible* membership, **not** honest

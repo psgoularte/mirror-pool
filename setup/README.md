@@ -14,36 +14,46 @@ contributor discarded their randomness**.
 - `transcript/transcript.bin` — the base `delta` + every contribution with its
   Schnorr proof-of-contribution and same-ratio consistency.
 
-These come from one real 3-contribution ceremony. **The proving key is not
-committed** (it is large; each operator generates their own — see below). The
-committed key is a verifiable *reference*, not the key you deploy with.
+The committed key has **1 independent contributor** (a single operator, one
+machine): `mirror-pool-maintainer (single operator, one machine, 2026-07)`.
+**The proving key is not committed** (it is large; each operator generates their
+own — see below). The committed key is a verifiable *reference*, not the key you
+deploy with.
 
-## Verify the ceremony
+## Verify the ceremony (anyone, public data only)
 
 ```sh
+cargo run -p mirror-pool-cli -- verify-setup      # transcript + verifying_key.bin
+# or the pinned-hash test:
 cargo test -p mirror-pool-circuit --test trusted_setup
 ```
 
-This (1) verifies the whole contribution chain, (2) checks the transcript
-matches the hash pinned in the test, and (3) confirms `verifying_key.solana.bin`
-is exactly the transcript's output. Verification is fully public.
+`verify-setup` runs every same-ratio + Schnorr check, confirms the chain produces
+the committed key, and prints each contributor + the **independent-contributor
+count** + the transcript hash. The test additionally pins that hash and asserts
+the independent count. Verification is fully public.
 
-## Run your own ceremony
+## Run the ceremony distributably (independent operators)
 
 ```sh
-cargo run -p mirror-pool-cli -- setup --out-dir my-setup --contributions 3
+cli ceremony-init --out-dir ceremony                       # base params + empty transcript
+cli ceremony-contribute --params ceremony/params.bin \     # each INDEPENDENT operator, in turn
+    --transcript ceremony/transcript.bin --contributor "alice" --out-dir ceremony
+cli ceremony-finalize --params ceremony/params.bin \       # derive + verify the key
+    --transcript ceremony/transcript.bin --out-dir setup
 ```
 
-Writes `proving_key.bin`, `verifying_key.bin`, `vk_solana.bin`, and
-`transcript.bin`. Use `vk_solana.bin` for `init-pool --verifying-key` and
-`proving_key.bin` for `prove` / `associate`.
+Only public data (`params.bin` + `transcript.bin`) passes between operators; each
+operator's entropy lives in their process and is discarded on exit. A single-shot
+convenience path (`cli setup --contributions N`) exists too, but N self-run steps
+are still one independent contributor.
 
 ## ⚠ Honest scope
 
-- **This CLI runs all contributions on one machine**, so it is only as honest as
-  that single operator. A real deployment coordinates contributions across
-  **independent** parties, each on their own machine, publishing the transcript
-  for public verification.
+- **The shipped key is single-operator (1 independent contributor).** The tooling
+  above *can* be run by independent parties — that is what makes the "≥1 honest"
+  guarantee real — but the committed key was not, so its assurance is "trust that
+  one operator." Running more self-steps does **not** change this.
 - **Phase-2 only.** The ceremony re-randomizes `delta`; `alpha, beta, gamma, tau`
   come from the base setup, which rests on that base's entropy being discarded.
   A production deployment adds a public **Phase-1** powers-of-tau (the arkworks

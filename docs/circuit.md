@@ -48,16 +48,48 @@ publishes a Schnorr proof-of-contribution; a pairing same-ratio check ties the
 `g1`/`g2` updates to one `s`. The key is secure **if at least one contributor
 discarded their randomness**.
 
-The committed ceremony (`setup/`) is verified by
-`circuit/tests/trusted_setup.rs`: it replays and verifies the whole contribution
-chain, pins the transcript by SHA-256, and confirms the committed on-chain VK is
-the ceremony output. Correctness of the `delta` update is gated by
-`ceremony::tests::ceremony_key_still_proves_and_verifies` (a full prove+verify
-with the multi-contributed key).
+Each contribution records its **contributor id** (bound into the Fiat–Shamir
+challenge, so it cannot be re-attributed) and a **prior-state hash** chaining it
+to its predecessor.
+
+### Contribute to the ceremony (any independent operator)
+
+Contributions need **no shared secret** — you only ever handle public params +
+transcript, and your entropy never leaves your process:
+
+```sh
+# Coordinator, once: publish base params + an empty transcript.
+cli ceremony-init --out-dir ceremony
+
+# Each INDEPENDENT operator, in turn (fresh OS entropy, discarded on exit):
+cli ceremony-contribute --params ceremony/params.bin \
+    --transcript ceremony/transcript.bin \
+    --contributor "alice (laptop)" --out-dir ceremony
+# → hand the updated ceremony/params.bin + transcript.bin to the next operator
+
+# Coordinator, once done: derive + verify the key, print the hash to pin.
+cli ceremony-finalize --params ceremony/params.bin \
+    --transcript ceremony/transcript.bin --out-dir setup
+```
+
+Independence is what makes the "≥1 honest" guarantee real: N steps by the *same*
+operator count as **one** contributor.
+
+### Verify the ceremony (anyone, public data only)
+
+```sh
+cli verify-setup   # defaults to setup/transcript/transcript.bin + setup/verifying_key.bin
+```
+
+It runs every same-ratio + Schnorr check, confirms the chain produces the
+committed key, and prints each contributor, the **independent-contributor count**,
+and the transcript hash (compare it to the value pinned in
+`circuit/tests/trusted_setup.rs`).
 
 **Honest scope.** Phase-2 re-randomizes `delta` only; `alpha, beta, gamma, tau`
 come from the base setup (they would come from a universal **Phase-1**
 powers-of-tau in production — the arkworks stack does not ingest an external
-`.ptau`, so that Phase-1 is future work). The committed key's contributions were
-run on one machine, so it is single-operator honest — suitable for review and
-testnets, not for securing real value. See [`docs/security.md`](./security.md).
+`.ptau`, so that Phase-1 is future work). The committed key currently has **1
+independent contributor** (a single operator on one machine), so it is
+single-operator honest — suitable for review and testnets, not for securing real
+value. See [`docs/security.md`](./security.md).
