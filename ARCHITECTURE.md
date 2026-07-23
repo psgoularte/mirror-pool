@@ -507,6 +507,22 @@ pays the fee.*
 | 7 | Compliance (viewing keys + screening hook) | ✅ done |
 | 8 | Threat model + docs + demo (`demo.sh`, CLI `sim`) | ✅ done |
 
+### Post-milestone passes (additive, after M8)
+
+These built on the M1–M8 base without changing its guarantees; each is documented
+and tested where noted.
+
+| Pass | What it added | State |
+|------|---------------|-------|
+| Hardening | Pool-scoped nullifier PDAs, on-chain `k_min` floor (`AnonymitySetTooSmall`), fixed `TransferAction` denominations, `VerifyMembership` gated behind `#[cfg(feature = "bench")]` (out of the deployed artifact), structured self-review | ✅ done |
+| Live devnet | Deployed to devnet (`4YrUSMP2gG9v9SJAgQPNYpzvUSxqWVBBQwdc7g52xYPe`) + end-to-end run with real, `Finalized` signatures ([`docs/PROOF.md`](./docs/PROOF.md)) | ✅ done |
+| Anonymity metric | Min-entropy effective-k (`1/max pᵢ`), dominant-funder adjustment, Anonymity-Trilemma framing ([`docs/anonymity.md`](./docs/anonymity.md)) | ✅ done |
+| Compliance (Privacy-Pools) | Association sets: ZK **inclusion** proof (reuses the circuit) + off-chain **exclusion** reference; ZK on-chain exclusion is future work ([`docs/compliance.md`](./docs/compliance.md)) | ✅ done |
+| Trusted-setup ceremony | Multi-contributor Phase-2 → **distributable + independently verifiable** (`cli verify-setup`); committed key = **1 independent contributor** (single operator) → testnet-grade ([`docs/security.md`](./docs/security.md), [`docs/circuit.md`](./docs/circuit.md)) | ✅ done |
+| Anti-Sybil entry fee + real-k | On-chain `entry_fee` **prices** Sybil identities (`EntryFeeUnpaid`); `sim` headlines **real-k** to **measure** honest anonymity — priced and measured, not solved | ✅ done |
+| Scale analysis | `cli scale` sweeps effective-k / real-k vs. size & Sybil pressure over **synthetic** populations ([`docs/scale-analysis.md`](./docs/scale-analysis.md)) — the metric at scale, not a real crowd | ✅ done |
+| Docs consolidation + audit | Content moved into `docs/`, README rewritten as the front door, and a claim-vs-code reconciliation audit | ✅ done |
+
 ## References
 
 Primary sources for the anonymity metric, the trilemma framing, and the
