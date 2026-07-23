@@ -114,6 +114,38 @@ pub struct ScopeReport {
     pub worst_uniform_effective_k: f64,
     /// The worst dominance-adjusted effective-k across all buckets.
     pub worst_dominance_adjusted_effective_k: f64,
+    /// Nominal candidate count in this scope (notes, before any discounting).
+    pub nominal_k: usize,
+    /// Notes flagged as Sybil-suspected by the transparent same-funder
+    /// clustering heuristic: the count controlled by the single largest funder.
+    /// `real_k = nominal_k − flagged`.
+    pub flagged: usize,
+}
+
+impl ScopeReport {
+    /// **real-k**: the honest, Sybil-discounted anonymity estimate for this
+    /// scope, `nominal_k − flagged`. By construction this equals the worst-bucket
+    /// dominance-adjusted effective-k (the largest colluding funder's notes are
+    /// removed) — it is the same min-entropy machinery, surfaced as the headline
+    /// figure, not a new metric.
+    ///
+    /// This is an **estimate**, not a cryptographic guarantee: the heuristic
+    /// discounts only the single largest funder cluster, so an adversary who
+    /// splits Sybils across many distinct identities evades it — which is exactly
+    /// why it is paired with the on-chain entry fee (that prices each identity).
+    pub fn real_k(&self) -> f64 {
+        self.worst_dominance_adjusted_effective_k
+    }
+}
+
+/// Cost, in lamports, for an adversary to inflate the nominal set from
+/// `honest_k` to `target_nominal_k` when the pool charges `entry_fee` per
+/// deposit: `(target − honest) × entry_fee`. Zero when the fee is off or the
+/// target is not above the honest count. This is the economic teeth behind the
+/// entry fee — it does not make Sybil inflation impossible, only costly.
+pub fn sybil_inflation_cost(target_nominal_k: u64, honest_k: u64, entry_fee: u64) -> u128 {
+    let extra = target_nominal_k.saturating_sub(honest_k) as u128;
+    extra * entry_fee as u128
 }
 
 /// A full epoch measurement: the same computation over the associated set and
@@ -188,6 +220,8 @@ fn scope_report(notes: &[Note], buckets_present: &[Bucket]) -> ScopeReport {
         } else {
             0.0
         },
+        nominal_k,
+        flagged: max_funder,
     }
 }
 
@@ -276,5 +310,54 @@ mod tests {
         // And over ALL, the dominance-adjusted figure collapses (one funder owns
         // the 20 Sybils): 23 - 20 = 3.
         assert_eq!(r.over_all.worst_dominance_adjusted_effective_k, 3.0);
+    }
+
+    #[test]
+    fn real_k_is_nominal_minus_flagged() {
+        // 3 honest associated + 20 same-funder Sybils.
+        let mut notes = vec![
+            Note {
+                funder: 1,
+                associated: true,
+            },
+            Note {
+                funder: 2,
+                associated: true,
+            },
+            Note {
+                funder: 3,
+                associated: true,
+            },
+        ];
+        notes.extend((0..20).map(|_| Note {
+            funder: 99,
+            associated: false,
+        }));
+        let b = [Bucket {
+            denomination: 0,
+            action_type: 0,
+        }];
+        let r = measure(&notes, &b);
+        // Over all deposits: nominal 23, flagged 20 (the Sybil funder), real-k 3.
+        assert_eq!(r.over_all.nominal_k, 23);
+        assert_eq!(r.over_all.flagged, 20);
+        assert_eq!(r.over_all.real_k(), 3.0);
+        // real-k is exactly the dominance-adjusted figure — same machinery.
+        assert_eq!(
+            r.over_all.real_k(),
+            r.over_all.worst_dominance_adjusted_effective_k
+        );
+    }
+
+    #[test]
+    fn sybil_cost_scales_with_fee() {
+        // Inflating nominal from 8 honest to 64 costs 56 fake identities × fee.
+        assert_eq!(
+            sybil_inflation_cost(64, 8, 1_000_000_000),
+            56u128 * 1_000_000_000
+        );
+        // Fee off, or no inflation, costs nothing.
+        assert_eq!(sybil_inflation_cost(64, 8, 0), 0);
+        assert_eq!(sybil_inflation_cost(8, 8, 1_000_000_000), 0);
     }
 }

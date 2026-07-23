@@ -16,12 +16,15 @@ use solana_program::program_error::ProgramError;
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
 pub enum Instruction {
     /// (0) Create and initialize a pool config PDA with an empty tree of
-    /// `depth`, a minimum anonymity set `k_min`, and the membership circuit's
-    /// verifying key.
+    /// `depth`, a minimum anonymity set `k_min`, the membership circuit's
+    /// verifying key, and an anti-Sybil `entry_fee` in lamports (`0` disables
+    /// it, preserving permissionless deposits). `entry_fee` is the **last**
+    /// field so the encoding stays append-only.
     InitializePool {
         depth: u8,
         k_min: u64,
         verifying_key: [u8; VK_SERIALIZED_LEN],
+        entry_fee: u64,
     },
 
     /// (1) Insert a commitment leaf into the pool's Merkle tree.

@@ -57,6 +57,28 @@ association set is the precondition that makes the metric meaningful. See the
 [threat model](../ARCHITECTURE.md#threat-model) for the residual `k_min`/Sybil
 limitation — the metric quantifies it rather than hiding it.
 
+## real-k: the headline figure (priced and measured)
+
+The number `sim` leads with is **real-k = nominal − flagged**, where *flagged* is
+the same-funder clustering above (the largest funder's notes discounted). It is
+exactly the dominance-adjusted effective-k, surfaced as the headline so the
+inflatable `nominal` count is never the primary figure:
+
+```
+$ mirror-pool sim --members 16 --sybils 48 --actors 8 --entry-fee 1000000000
+  epoch 1: real-k = 16.0 (nominal 64, flagged 48); real-k over associated set = 15.0
+  entry fee: inflating to nominal 64 with 48 sybils costs 48 × 1000000000 = 48 SOL
+```
+
+real-k is an **estimate**, not a guarantee: it discounts only the single largest
+cluster, so an adversary who splits Sybils across many identities evades it. That
+is why it is paired with the on-chain **entry fee** — `PoolConfig.entry_fee`
+prices each identity (`s` Sybils cost `s × entry_fee`), so the cheap
+single-funder inflation the heuristic catches and the split-identity inflation it
+misses are *both* made costly. Neither prices nor measurement solves Sybil
+resistance; together they narrow it honestly. See
+[`security.md`](./security.md) for the residual.
+
 ## Why synchronized epochs (Anonymity Trilemma)
 
 Epoch windows are not an arbitrary latency knob. The **Anonymity Trilemma** (Das,

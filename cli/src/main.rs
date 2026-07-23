@@ -122,6 +122,10 @@ enum Command {
         actors: u64,
         #[arg(long, default_value_t = 3)]
         epochs: u64,
+        /// Pool entry fee in lamports; used to price the cost of the simulated
+        /// Sybil inflation (0 = fee off).
+        #[arg(long, default_value_t = 0)]
+        entry_fee: u64,
     },
     /// Create a pool on-chain (the signer becomes the pool authority). Uses the
     /// deterministic dev verifying key.
@@ -137,6 +141,11 @@ enum Command {
         verifying_key: PathBuf,
         #[arg(long, default_value_t = 2)]
         k_min: u64,
+        /// Anti-Sybil entry fee in lamports charged on every deposit (0 = off).
+        /// Prices Sybil inflation (each fake identity costs a real fee); it does
+        /// not make it impossible.
+        #[arg(long, default_value_t = 0)]
+        entry_fee: u64,
     },
     /// Open or close the current epoch (authority-only crank).
     Crank {
@@ -222,14 +231,23 @@ fn main() -> Result<()> {
             sybils,
             actors,
             epochs,
-        } => cmd_sim(members, sybils, actors, epochs),
+            entry_fee,
+        } => cmd_sim(members, sybils, actors, epochs, entry_fee),
         Command::InitPool {
             rpc_url,
             keypair,
             program_id,
             verifying_key,
             k_min,
-        } => cmd_init_pool(&rpc_url, &keypair, &program_id, &verifying_key, k_min),
+            entry_fee,
+        } => cmd_init_pool(
+            &rpc_url,
+            &keypair,
+            &program_id,
+            &verifying_key,
+            k_min,
+            entry_fee,
+        ),
         Command::Crank {
             rpc_url,
             keypair,
@@ -445,8 +463,8 @@ fn cmd_disclose(secret_hex: &str, auditor_pubkey_hex: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_sim(members: u64, sybils: u64, actors: u64, epochs: u64) -> Result<()> {
-    use mirror_pool_anonymity::{measure, Bucket, Note};
+fn cmd_sim(members: u64, sybils: u64, actors: u64, epochs: u64, entry_fee: u64) -> Result<()> {
+    use mirror_pool_anonymity::{measure, sybil_inflation_cost, Bucket, Note};
     if actors > members {
         return Err(anyhow!(
             "actors ({actors}) cannot exceed honest members ({members})"
@@ -490,38 +508,60 @@ fn cmd_sim(members: u64, sybils: u64, actors: u64, epochs: u64) -> Result<()> {
         "mirror-pool sim: {members} honest members, {sybils} sybils, {actors} actors/epoch, {epochs} epochs"
     );
     println!(
-        "metric: min-entropy effective-k = 1/max_i p_i (single-guess adversary; PET'02, FoSSaCS'09)\n"
+        "headline: real-k = nominal − flagged (same-funder clustering), == dominance-adjusted \
+         min-entropy effective-k (1/max_i p_i; PET'02, FoSSaCS'09). nominal shown as secondary.\n"
     );
 
     let report = measure(&notes, &buckets);
     for epoch in 1..=epochs {
-        // Every epoch draws from the same candidate set; the honest figure is
-        // over the association set, the naive figure over all deposits.
-        let assoc = report.over_associated.worst_uniform_effective_k;
-        let all = report.over_all.worst_uniform_effective_k;
-        let dom = report.over_all.worst_dominance_adjusted_effective_k;
+        // Every epoch draws from the same candidate set. The headline is real-k
+        // over all deposits (the observer's view, with flagged Sybils removed);
+        // nominal is the naive, inflatable count shown as a labeled secondary.
+        let real_k = report.over_all.real_k();
+        let nominal = report.over_all.nominal_k;
+        let assoc_real = report.over_associated.real_k();
         let warn = if actors <= 1 {
             "  ⚠ single action this window — timing-correlatable regardless of k"
         } else {
             ""
         };
         println!(
-            "  epoch {epoch}: effective-k over associated = {assoc:.1}, over all deposits = {all:.1} \
-             (Sybil gap {:.1}); dominance-adjusted = {dom:.1}{warn}",
-            report.sybil_gap()
+            "  epoch {epoch}: real-k = {real_k:.1} (nominal {nominal}, flagged {}); \
+             real-k over associated set = {assoc_real:.1}{warn}",
+            report.over_all.flagged
         );
     }
     println!(
-        "\nWorst-bucket effective-k: {:.1} over the association set vs {:.1} over all deposits.",
-        report.over_associated.worst_uniform_effective_k, report.over_all.worst_uniform_effective_k
+        "\nHeadline real-k: {:.1} (nominal {} over all deposits; {:.1} over the association set).",
+        report.over_all.real_k(),
+        report.over_all.nominal_k,
+        report.over_associated.real_k(),
     );
     println!(
-        "The gap ({:.1}) is the Sybil exposure: effective-k over all deposits is inflatable by \
-         unassociated notes, so only the association-set figure is an honest floor. A colluding \
-         funder controlling a bucket reduces it further (dominance-adjusted above). See the \
-         threat model; k_min on-chain bounds membership, NOT honest anonymity.",
-        report.sybil_gap()
+        "real-k discounts the largest same-funder cluster — an estimate of honest anonymity, NOT \
+         a cryptographic guarantee (an adversary splitting Sybils across many identities evades \
+         the heuristic). k_min on-chain bounds program-visible membership, NOT honest anonymity."
     );
+    if entry_fee > 0 {
+        let cost = sybil_inflation_cost(members + sybils, members, entry_fee);
+        println!(
+            "entry fee: inflating to nominal {} with {} sybils costs {} × {} = {} lamports ({:.3} SOL) — \
+             the fee prices Sybil inflation; it does not make it impossible.",
+            members + sybils,
+            sybils,
+            sybils,
+            entry_fee,
+            cost,
+            cost as f64 / 1e9,
+        );
+    } else {
+        println!(
+            "entry fee: OFF (--entry-fee 0). With a fee set, inflating to nominal {} would cost \
+             {} × entry_fee lamports; run with --entry-fee to price it.",
+            members + sybils,
+            sybils,
+        );
+    }
     Ok(())
 }
 
@@ -543,6 +583,7 @@ fn cmd_init_pool(
     program_id: &str,
     verifying_key: &Path,
     k_min: u64,
+    entry_fee: u64,
 ) -> Result<()> {
     let rpc = RpcClient::new_with_commitment(rpc_url.to_string(), CommitmentConfig::confirmed());
     let program_id = Pubkey::from_str(program_id).context("program id")?;
@@ -567,6 +608,7 @@ fn cmd_init_pool(
         depth: TREE_DEPTH as u8,
         k_min,
         verifying_key: vk_bytes,
+        entry_fee,
     }
     .pack()
     .map_err(|e| anyhow!("pack: {e:?}"))?;
@@ -582,7 +624,7 @@ fn cmd_init_pool(
     let bh = rpc.get_latest_blockhash().context("blockhash")?;
     let tx = Transaction::new_signed_with_payer(&[ix], Some(&payer.pubkey()), &[&payer], bh);
     let sig = rpc.send_and_confirm_transaction(&tx).context("init pool")?;
-    println!("pool {pool} initialized (k_min {k_min}): {sig}");
+    println!("pool {pool} initialized (k_min {k_min}, entry_fee {entry_fee}): {sig}");
     Ok(())
 }
 
@@ -632,9 +674,17 @@ fn cmd_deposit(
     }
     .pack()
     .map_err(|e| anyhow!("pack: {e:?}"))?;
+    // Pass the depositor (signer, writable) + system_program so the deposit
+    // works whether or not the pool charges an entry fee: the program consumes
+    // these only when `entry_fee > 0` (to CPI the fee into the pool vault), and
+    // ignores the extra accounts when the fee is disabled.
     let ix = Instruction {
         program_id,
-        accounts: vec![AccountMeta::new(pool, false)],
+        accounts: vec![
+            AccountMeta::new(pool, false),
+            AccountMeta::new(payer.pubkey(), true),
+            AccountMeta::new_readonly(solana_sdk::system_program::id(), false),
+        ],
         data,
     };
     let bh = rpc.get_latest_blockhash().context("blockhash")?;

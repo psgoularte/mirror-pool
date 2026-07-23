@@ -84,7 +84,9 @@ and the epoch window is busy, provided a trusted relayer pays the fee.*
 - **Anonymity-set minimum is a provable floor, not the exact set.** The on-chain
   invariant enforces `members_deposited − actions_this_epoch ≥ k_min`; the true
   anonymity set (an observer cannot link nullifiers to commitments) is generally
-  larger, but the program only guarantees the floor.
+  larger, but the program only guarantees the floor. The Sybil-inflation gap in
+  that floor is **priced** by the optional `entry_fee` and **measured** by real-k
+  (see the Security-review section below) — priced and measured, not solved.
 - **Relayer trust.** The relayer learns the member↔action link by construction
   (it holds the job). Use a relayer you trust or a decentralized relayer set.
 - **Association-set compliance — partial.** The `associate` inclusion proof is a
@@ -159,6 +161,29 @@ code enforces exactly what it claims; the honest-anonymity gap is a
 **deployment/policy** concern (enable the screening hook, or require staked/
 attested deposits) and is documented in the threat model. **Do not read `k_min`
 as a guarantee of honest anonymity.**
+
+**Mitigation — priced and measured, not solved.** Two additive mechanisms
+narrow this gap without pretending to close it:
+
+1. **Entry fee (prices it).** `PoolConfig.entry_fee` (an init parameter; `0` =
+   off, the default, reproducing permissionless deposits exactly) charges a
+   per-deposit fee, paid into the pool PDA (the fee vault) via a program-issued
+   system transfer as a precondition of `deposit`. Underpayment is rejected with
+   `EntryFeeUnpaid` (`Custom(27)`). This makes Sybil inflation *cost real
+   lamports per fake identity* — inflating to nominal `k` with `s` Sybils costs
+   `s × entry_fee` — but it does **not** make it impossible; a funded adversary
+   can still pay. It raises the cost; it is not a cryptographic barrier.
+2. **real-k (measures it).** The `anonymity` crate and `cli sim` now headline
+   **real-k = nominal − flagged**, where *flagged* is the transparent same-funder
+   clustering heuristic already used for the dominance-adjusted effective-k (the
+   single largest funder's notes are discounted). real-k is an operator/observer
+   **estimate** of honest anonymity, **not** a guarantee: an adversary who splits
+   Sybils across many distinct funding identities evades the heuristic — which is
+   precisely why it is paired with the entry fee that prices each identity.
+
+Neither mechanism "solves" Sybil resistance. The residual above stands; the fee
+prices the attack and real-k reports the honest floor instead of the inflatable
+nominal count.
 
 ## Responsible disclosure
 

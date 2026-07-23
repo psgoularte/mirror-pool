@@ -146,8 +146,10 @@ root-history ring buffer, and admin fields. Two design choices worth noting:
   off-chain reference (`common::merkle`) and the root the circuit proves under.
 
 Instructions added: `InitializePool` (creates the PDA `["pool", authority]`,
-empty tree) and `Deposit` (insert a commitment). Measured cost: init ≈24k CU,
-deposit ≈18.5k CU.
+empty tree; takes `k_min` and the anti-Sybil `entry_fee`) and `Deposit` (insert a
+commitment, paying `entry_fee` into the pool vault when non-zero — see the Sybil
+mitigation under `k_min`). Measured cost: init ≈24k CU, deposit ≈18.5k CU
+(≈21k with a fee transfer).
 
 Correctness is gated by host tests (incremental root == reference root at every
 step; on-chain Poseidon == `common::poseidon`; history eviction; tree-full) and
@@ -247,6 +249,22 @@ this bound is `≥ k_min`, a per-pool parameter set at `initialize_pool`.
   deposit-screening hook or requiring staked/attested deposits. `k_min` is a
   guard against *empty-window* leakage, not a defense against a Sybil adversary.
 
+**Sybil mitigation — priced and measured, not solved.** Two additive mechanisms
+narrow (never close) the gap above:
+
+- **Entry fee (`PoolConfig.entry_fee`).** An init parameter in lamports (`0` =
+  off, the default → permissionless deposits, unchanged). When set, every
+  `deposit` must pay the fee into the **pool PDA (the fee vault)**: the program
+  issues a system `transfer` from the depositor as a precondition and rejects
+  underpayment with `EntryFeeUnpaid` (`Custom(27)`). Cost to inflate to nominal
+  `k` with `s` Sybils is `s × entry_fee`. The field is appended at the tail of
+  the zero-copy `PoolConfig` (no existing offset shifts); the deposit's depositor
+  + system-program accounts are consumed only when `entry_fee > 0`. This **prices**
+  Sybil inflation — it does not make it impossible.
+- **real-k (measurement).** See the effective-k section below: `real-k = nominal
+  − flagged` where *flagged* is the same-funder clustering already used for the
+  dominance adjustment. An estimate of honest anonymity, not a guarantee.
+
 ## Anonymity measurement: min-entropy effective-k (off-chain)
 
 The cheap on-chain `k_min` count is a *floor*, not the real privacy figure. The
@@ -280,8 +298,20 @@ single-guess adversary's success bound — the honest worst case, not an average
    funder [Sweeney 2002 (k-anonymity); Machanavajjhala et al. 2007 (l-diversity);
    Li–Li–Venkatasubramanian 2007 (t-closeness)].
 
-`cli sim` reports all of these; e.g. `8 honest + 40 sybils` yields effective-k
-`8` over the association set vs `48` over all deposits — a Sybil gap of `40`.
+**real-k (the headline figure).** `real-k = nominal_k − flagged`, where *flagged*
+is the same-funder clustering heuristic from point 3 (the single largest funder's
+notes are discounted). By construction this **equals the dominance-adjusted
+effective-k** — it is the same min-entropy machinery surfaced as the user-facing
+headline, with the raw `nominal_k` shown only as a labeled secondary. It is an
+operator/observer **estimate** of honest anonymity, **not** a cryptographic
+guarantee: it discounts only the single largest cluster, so an adversary who
+splits Sybils across many identities evades it — which is exactly why it is paired
+with the entry fee (`§ k_min` above) that prices each identity.
+
+`cli sim` reports real-k as the headline; e.g. `16 honest + 48 sybils` yields
+`real-k 16` (nominal `64`, flagged `48`), and with `--entry-fee 1_000_000_000`
+prices that inflation at `48 × 1 SOL = 48 SOL`. `EpochReport::sybil_gap` and the
+per-scope `nominal_k`/`flagged`/`real_k()` back these numbers.
 
 ## Synchronized rounds & the Anonymity Trilemma
 

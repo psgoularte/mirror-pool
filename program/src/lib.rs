@@ -16,7 +16,7 @@ use solana_program::{
     entrypoint::ProgramResult,
     instruction::Instruction as SolInstruction,
     msg,
-    program::invoke_signed,
+    program::{invoke, invoke_signed},
     program_error::ProgramError,
     pubkey::Pubkey,
     rent::Rent,
@@ -59,7 +59,15 @@ pub fn process_instruction(
             depth,
             k_min,
             verifying_key,
-        } => process_initialize_pool(program_id, accounts, depth, k_min, &verifying_key),
+            entry_fee,
+        } => process_initialize_pool(
+            program_id,
+            accounts,
+            depth,
+            k_min,
+            entry_fee,
+            &verifying_key,
+        ),
         Instruction::Deposit { commitment } => process_deposit(program_id, accounts, commitment),
         Instruction::ExecuteAction {
             proof,
@@ -113,6 +121,7 @@ fn process_initialize_pool(
     accounts: &[AccountInfo],
     depth: u8,
     k_min: u64,
+    entry_fee: u64,
     verifying_key: &[u8; verifier::VK_SERIALIZED_LEN],
 ) -> ProgramResult {
     let account_iter = &mut accounts.iter();
@@ -149,21 +158,37 @@ fn process_initialize_pool(
 
     let mut data = pool_account.try_borrow_mut_data()?;
     let config = PoolConfig::load_mut(&mut data)?;
-    config.initialize(payer.key.to_bytes(), bump, depth, k_min, verifying_key)?;
+    config.initialize(
+        payer.key.to_bytes(),
+        bump,
+        depth,
+        k_min,
+        entry_fee,
+        verifying_key,
+    )?;
 
     msg!(
-        "mirror-pool: pool initialized (depth {}, k_min {})",
+        "mirror-pool: pool initialized (depth {}, k_min {}, entry_fee {})",
         depth,
-        k_min
+        k_min,
+        entry_fee
     );
     Ok(())
 }
 
 /// `Deposit`: insert a commitment leaf, advancing the tree and root history.
 ///
-/// Accounts: `[pool (writable), <screening_authority (signer)>]`. The screening
-/// account is required only when the pool has screening enabled — the pluggable,
-/// off-by-default entry hook.
+/// Accounts (in order): `[pool (writable), <screener (signer)>,
+/// <depositor (signer, writable), system_program>]`. The screener is required
+/// only when screening is enabled; the depositor + system_program are required
+/// only when the pool charges a non-zero `entry_fee`. With screening off and
+/// `entry_fee = 0` the account list is just `[pool]` — identical to the original
+/// permissionless deposit.
+///
+/// The entry fee is the anti-Sybil mitigation: when set, every commitment costs
+/// `entry_fee` lamports, paid into the pool PDA (the fee vault) by the depositor.
+/// This raises the *cost* of inflating the anonymity set with self-controlled
+/// commitments; it does not make Sybil inflation impossible.
 fn process_deposit(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -174,17 +199,26 @@ fn process_deposit(
     if pool_account.owner != program_id {
         return Err(MirrorPoolError::InvalidAccountOwner.into());
     }
-    let mut data = pool_account.try_borrow_mut_data()?;
-    let config = PoolConfig::load_mut(&mut data)?;
-    if config.is_initialized == 0 {
-        return Err(MirrorPoolError::NotInitialized.into());
-    }
+
+    // Read the fee/screening config without holding the borrow across the CPI.
+    let (entry_fee, screening_enabled, screening_authority) = {
+        let data = pool_account.try_borrow_data()?;
+        let config = PoolConfig::load(&data)?;
+        if config.is_initialized == 0 {
+            return Err(MirrorPoolError::NotInitialized.into());
+        }
+        (
+            config.entry_fee(),
+            config.screening_enabled(),
+            config.screening_authority,
+        )
+    };
 
     // Deposit-screening hook (off by default).
-    if config.screening_enabled() {
+    if screening_enabled {
         let screener = next_account_info(account_iter)
             .map_err(|_| ProgramError::from(MirrorPoolError::ScreeningRequired))?;
-        if screener.key.to_bytes() != config.screening_authority {
+        if screener.key.to_bytes() != screening_authority {
             return Err(MirrorPoolError::ScreeningRequired.into());
         }
         if !screener.is_signer {
@@ -192,6 +226,32 @@ fn process_deposit(
         }
     }
 
+    // Anti-Sybil entry fee (off when `entry_fee == 0`). The depositor pays the
+    // fee into the pool PDA; underpayment (insufficient balance) is a loud,
+    // typed rejection. No borrow of the pool data is held across the transfer.
+    if entry_fee > 0 {
+        let depositor = next_account_info(account_iter)
+            .map_err(|_| ProgramError::from(MirrorPoolError::EntryFeeUnpaid))?;
+        let system_program = next_account_info(account_iter)
+            .map_err(|_| ProgramError::from(MirrorPoolError::MissingAccount))?;
+        if !depositor.is_signer {
+            return Err(MirrorPoolError::MissingSignature.into());
+        }
+        if depositor.lamports() < entry_fee {
+            return Err(MirrorPoolError::EntryFeeUnpaid.into());
+        }
+        invoke(
+            &transfer_ix(depositor.key, pool_account.key, entry_fee),
+            &[
+                depositor.clone(),
+                pool_account.clone(),
+                system_program.clone(),
+            ],
+        )?;
+    }
+
+    let mut data = pool_account.try_borrow_mut_data()?;
+    let config = PoolConfig::load_mut(&mut data)?;
     let index = config.insert(commitment)?;
     msg!("mirror-pool: deposit at leaf index {}", index);
     Ok(())
@@ -479,4 +539,11 @@ fn create_account_ix(
     owner: &Pubkey,
 ) -> SolInstruction {
     solana_program::system_instruction::create_account(from, to, lamports, space, owner)
+}
+
+/// System-program `transfer` instruction (for the anti-Sybil entry fee). Same
+/// deprecation note as [`create_account_ix`].
+#[allow(deprecated)]
+fn transfer_ix(from: &Pubkey, to: &Pubkey, lamports: u64) -> SolInstruction {
+    solana_program::system_instruction::transfer(from, to, lamports)
 }

@@ -83,6 +83,7 @@ fn main() {
     let mut init = vec![0u8, TREE_DEPTH as u8];
     init.extend_from_slice(&1u64.to_le_bytes());
     init.extend_from_slice(&vk_bytes);
+    init.extend_from_slice(&0u64.to_le_bytes()); // entry_fee = 0
     submit(
         &mut svm,
         &payer,

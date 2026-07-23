@@ -67,6 +67,7 @@ fn main() {
     let mut init_data = vec![0u8, TREE_DEPTH as u8];
     init_data.extend_from_slice(&1u64.to_le_bytes());
     init_data.extend_from_slice(&vk_bytes);
+    init_data.extend_from_slice(&0u64.to_le_bytes()); // entry_fee = 0 (disabled)
     send(
         &mut svm,
         &payer,
@@ -315,8 +316,9 @@ fn main() {
     let mut reinit = vec![0u8, TREE_DEPTH as u8];
     reinit.extend_from_slice(&1u64.to_le_bytes());
     reinit.extend_from_slice(&vk_bytes);
-    // Prepend a compute-budget ix so this isn't byte-identical to the original
-    // init tx (which would be deduped as already-processed before running).
+    reinit.extend_from_slice(&0u64.to_le_bytes()); // entry_fee = 0
+                                                   // Prepend a compute-budget ix so this isn't byte-identical to the original
+                                                   // init tx (which would be deduped as already-processed before running).
     expect_reject_ixs(
         &mut svm,
         &payer,
@@ -363,6 +365,7 @@ fn main() {
         let mut init_b = vec![0u8, TREE_DEPTH as u8];
         init_b.extend_from_slice(&2u64.to_le_bytes()); // k_min = 2
         init_b.extend_from_slice(&vk_bytes);
+        init_b.extend_from_slice(&0u64.to_le_bytes()); // entry_fee = 0
         send(
             &mut svm,
             &auth_b,
@@ -472,6 +475,7 @@ fn main() {
             let mut init = vec![0u8, TREE_DEPTH as u8];
             init.extend_from_slice(&1u64.to_le_bytes());
             init.extend_from_slice(&vk_bytes);
+            init.extend_from_slice(&0u64.to_le_bytes()); // entry_fee = 0
             send(
                 svm,
                 auth,
@@ -562,10 +566,95 @@ fn main() {
         println!("[nullifier-scope] same nullifier hash spent independently in two pools");
     }
 
+    // --- Anti-Sybil entry fee (Section 1d): a non-zero entry_fee is charged
+    // into the pool PDA (the fee vault) on every deposit. Underpayment (or
+    // omitting the fee accounts) is rejected with EntryFeeUnpaid (27); a correct
+    // payment is accepted and the pool balance grows by exactly the fee. The
+    // whole flow above runs entry_fee = 0, so the disabled path is the default. ---
+    {
+        let auth_f = Keypair::new();
+        svm.airdrop(&auth_f.pubkey(), 5_000_000_000).unwrap();
+        let (pool_f, _bf) =
+            Address::find_program_address(&[POOL_SEED, auth_f.pubkey().as_ref()], &program_id);
+        let entry_fee: u64 = 1_000_000_000; // 1 SOL per deposit
+        let mut init_f = vec![0u8, TREE_DEPTH as u8];
+        init_f.extend_from_slice(&1u64.to_le_bytes()); // k_min = 1
+        init_f.extend_from_slice(&vk_bytes);
+        init_f.extend_from_slice(&entry_fee.to_le_bytes());
+        send(
+            &mut svm,
+            &auth_f,
+            Instruction {
+                program_id,
+                accounts: vec![
+                    AccountMeta::new(auth_f.pubkey(), true),
+                    AccountMeta::new(pool_f, false),
+                    AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
+                ],
+                data: init_f,
+            },
+            "init pool_f (entry_fee=1 SOL)",
+        );
+
+        let c = commitment(Fr::from(9000u64));
+        let mut dep_data = vec![1u8];
+        dep_data.extend_from_slice(&fr_to_bytes_be(&c));
+        let dep_ix = |depositor: Address| Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new(pool_f, false),
+                AccountMeta::new(depositor, true),
+                AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
+            ],
+            data: dep_data.clone(),
+        };
+
+        // (a) Fee accounts omitted entirely → EntryFeeUnpaid (27).
+        let missing = Instruction {
+            program_id,
+            accounts: vec![AccountMeta::new(pool_f, false)],
+            data: dep_data.clone(),
+        };
+        expect_reject(&mut svm, &payer, missing, "entry fee accounts missing", 27);
+
+        // (b) Depositor cannot cover the fee → EntryFeeUnpaid (27). Funded above
+        // rent-exemption but below the 1 SOL fee.
+        let dep_poor = Keypair::new();
+        svm.airdrop(&dep_poor.pubkey(), 500_000_000).unwrap();
+        expect_reject(
+            &mut svm,
+            &dep_poor,
+            dep_ix(dep_poor.pubkey()),
+            "entry fee underpaid",
+            27,
+        );
+
+        // (c) Correct fee paid → accepted, and the pool (fee vault) grows by
+        // exactly entry_fee.
+        let dep_ok = Keypair::new();
+        svm.airdrop(&dep_ok.pubkey(), 3_000_000_000).unwrap();
+        let before = svm.get_balance(&pool_f).unwrap_or(0);
+        send(
+            &mut svm,
+            &dep_ok,
+            dep_ix(dep_ok.pubkey()),
+            "deposit with entry fee paid",
+        );
+        let after = svm.get_balance(&pool_f).unwrap_or(0);
+        if after - before != entry_fee {
+            eprintln!(
+                "FAIL[entry-fee]: pool balance grew by {} , expected {entry_fee}",
+                after - before
+            );
+            exit(1);
+        }
+        println!("[entry-fee] underpaid/omitted rejected (27); paid accepted; vault +{entry_fee} lamports");
+    }
+
     println!(
         "\n=== flow PASS: no-op + denominated transfer via pool PDA; \
          replay/binding/tampered/wrong-epoch/closed-epoch/re-init/unauthorized/\
-         bad-denomination/min-k/pool-scoped-nullifier all enforced ==="
+         bad-denomination/min-k/pool-scoped-nullifier/entry-fee all enforced ==="
     );
 }
 

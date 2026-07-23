@@ -89,6 +89,9 @@ pub enum MirrorPoolError {
 
     #[error("the transfer amount is not an allowed denomination")]
     InvalidDenomination = 26,
+
+    #[error("the required anti-Sybil entry fee was not paid")]
+    EntryFeeUnpaid = 27,
 }
 
 impl From<MirrorPoolError> for ProgramError {

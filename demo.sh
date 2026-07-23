@@ -50,8 +50,8 @@ echo "==> 6/6  CLI: keys, effective-k simulation, and a compliance inclusion pro
 cargo build -q -p mirror-pool-cli
 BIN=target/debug/mirror-pool
 echo "--- keygen (member) ---"; "$BIN" keygen
-echo "--- sim: effective-k over the association set vs all deposits (Sybil gap) ---"
-"$BIN" sim --members 16 --sybils 48 --actors 8 --epochs 2
+echo "--- sim: real-k (nominal − flagged) + entry-fee Sybil pricing ---"
+"$BIN" sim --members 16 --sybils 48 --actors 8 --epochs 2 --entry-fee 1000000000
 echo "--- associate: ZK inclusion proof (member in the association set) ---"
 WORK="$(mktemp -d)"
 echo "    (running a small Phase-2 ceremony for the proving key…)"

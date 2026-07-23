@@ -72,7 +72,7 @@ attacks the public trace:
 ## Level 5 — Robustness / abuse resistance ✅
 
 - **Fuzz malformed inputs:** `program` `robustness.rs` throws thousands of random byte strings at `Instruction::unpack` and `ParsedVerifyingKey::parse` — never panics, always a typed error; truncated/oversized/wrong-tag inputs rejected. `verify_membership_absent_from_default_build` asserts the bench instruction is gone from the deployed build.
-- **Re-initialization** → `Custom(6)`; **unauthorized crank** → `Custom(23)`; **epoch-not-active** → `Custom(21)`; **non-denominated transfer** → `Custom(26)`; **below k_min** → `Custom(25)` (all in `flow`).
+- **Re-initialization** → `Custom(6)`; **unauthorized crank** → `Custom(23)`; **epoch-not-active** → `Custom(21)`; **non-denominated transfer** → `Custom(26)`; **below k_min** → `Custom(25)`; **entry fee omitted/underpaid** → `Custom(27)` (all in `flow`).
 
 ## Hardening-pass gates (this round)
 
@@ -93,6 +93,8 @@ attacks the public trace:
 | Per-bucket (denomination×action-type), worst bucket | ✅ | `anonymity::measure`; reported by `sim` |
 | Over associated set **and** over all deposits; Sybil-gap delta | ✅ | `sim`: 16 vs 64, gap 48; `sybil_gap_is_reported` test |
 | Dominance/homogeneity adjustment (`k − max-funder`) | ✅ | `dominance_shrinks_effective_k` test |
+| Anti-Sybil entry fee (priced) | ✅ | `PoolConfig.entry_fee`; `flow` entry-fee section: omitted/underpaid → `Custom(27)`, paid accepted, vault +fee; `entry_fee=0` reproduces prior behavior (whole flow runs fee=0) |
+| real-k reporting (measured) | ✅ | `anonymity` `real_k_is_nominal_minus_flagged` + `sybil_cost_scales_with_fee`; `cli sim` headlines real-k with `--entry-fee` pricing |
 | Anonymity Trilemma justification of epochs | ✅ (doc) | ARCHITECTURE "Synchronized rounds & the Anonymity Trilemma" + References |
 | Association-set **inclusion** proof (ZK) | ✅ | `circuit::association` tests; `cli associate` self-verifies; outsider/wrong-root rejected |
 | Association-set **exclusion** | ⚠ off-chain reference only | `SanctionedSet::exclusion_witness` (native); ZK on-chain circuit documented as future work |

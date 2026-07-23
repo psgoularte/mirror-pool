@@ -87,6 +87,11 @@ Stated as facts about this design, not comparisons:
 - **Grounded anonymity metric** — min-entropy effective-k over the association
   set (not a naive count), derived from the primary literature and honest about
   the Sybil gap (see [`docs/anonymity.md`](./docs/anonymity.md)).
+- **Sybil: priced and measured, not solved** — an optional on-chain `entry_fee`
+  makes each fake identity cost real lamports (`s` Sybils → `s × entry_fee`), and
+  `cli sim` headlines **real-k** (nominal minus same-funder clustering) instead of
+  the inflatable nominal count. Both are honest mitigations, neither a guarantee
+  (see [`docs/security.md`](./docs/security.md)).
 - **Live on devnet** — deploys with `--arch v3` and the full flow runs against
   the deployed program over RPC. Program id
   [`4YrUSMP2gG9v9SJAgQPNYpzvUSxqWVBBQwdc7g52xYPe`](https://explorer.solana.com/address/4YrUSMP2gG9v9SJAgQPNYpzvUSxqWVBBQwdc7g52xYPe?cluster=devnet)
@@ -212,7 +217,7 @@ solana program deploy target/deploy/mirror_pool_program.so   # prints the Progra
 
 # Drive the full flow over RPC (localhost or devnet):
 PID=<program id>
-$BIN init-pool --program-id $PID --keypair <auth.json> --k-min 2
+$BIN init-pool --program-id $PID --keypair <auth.json> --k-min 2 --entry-fee 0   # --entry-fee>0 prices Sybils
 $BIN deposit   --program-id $PID --keypair <auth.json> --pool-authority <AUTH> --commitment <HEX>
 $BIN crank     --program-id $PID --keypair <auth.json> --action open
 $BIN prove     --proving-key artifacts/proving_key.bin --leaves leaves.txt --secret <HEX> --epoch 1 --out action.job
@@ -260,6 +265,7 @@ Failures return `ProgramError::Custom(n)` ([`program/src/error.rs`](./program/sr
 | 24 | ScreeningRequired | screening on; authority co-sign missing |
 | 25 | AnonymitySetTooSmall | lower bound below `k_min` |
 | 26 | InvalidDenomination | transfer amount not an allowed denomination |
+| 27 | EntryFeeUnpaid | anti-Sybil `entry_fee` not paid on deposit |
 
 ## Adding an action (extensibility)
 

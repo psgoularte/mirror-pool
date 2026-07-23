@@ -95,6 +95,16 @@ pub struct PoolConfig {
     /// Successful actions in the current epoch (LE bytes; use
     /// [`Self::epoch_actions`]). Reset to 0 by `open_epoch`.
     pub epoch_actions: [u8; 8],
+    /// Anti-Sybil entry fee in lamports charged on every `deposit` (LE bytes;
+    /// use [`Self::entry_fee`]). `0` disables the fee, reproducing the original
+    /// permissionless-deposit behavior exactly. When non-zero, each deposit must
+    /// pay this fee into the pool PDA (the fee vault), so inflating the anonymity
+    /// set with Sybil commitments costs real lamports per fake identity. This
+    /// **prices** Sybil inflation; it does not make it impossible.
+    ///
+    /// Appended at the tail of the struct so existing field offsets are
+    /// unchanged (additive layout change).
+    pub entry_fee: [u8; 8],
 }
 
 impl PoolConfig {
@@ -113,6 +123,7 @@ impl PoolConfig {
         + VK_SERIALIZED_LEN
         + 1
         + 32
+        + 8
         + 8
         + 8;
 
@@ -147,6 +158,11 @@ impl PoolConfig {
         u64::from_le_bytes(self.epoch_actions)
     }
 
+    /// The anti-Sybil entry fee in lamports (`0` = disabled).
+    pub fn entry_fee(&self) -> u64 {
+        u64::from_le_bytes(self.entry_fee)
+    }
+
     /// The on-chain lower bound on the anonymity set for the *next* action this
     /// epoch: the number of deposited members who provably have not acted yet
     /// (`members - actions_this_epoch`). This is a conservative floor — an
@@ -170,6 +186,7 @@ impl PoolConfig {
         bump: u8,
         depth: u8,
         k_min: u64,
+        entry_fee: u64,
         verifying_key: &[u8; VK_SERIALIZED_LEN],
     ) -> Result<(), ProgramError> {
         if self.is_initialized != 0 {
@@ -199,6 +216,7 @@ impl PoolConfig {
         self.screening_authority = [0u8; 32]; // screening off by default
         self.k_min = k_min.to_le_bytes();
         self.epoch_actions = 0u64.to_le_bytes();
+        self.entry_fee = entry_fee.to_le_bytes();
         Ok(())
     }
 
