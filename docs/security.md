@@ -117,6 +117,14 @@ and the epoch window is busy, provided a trusted relayer pays the fee.*
   no feature-gated path for it in the program). Association sets **narrow** the
   Sybil gap (they make effective-k measurable over attested members) but do not
   eliminate it — a corrupt ASP re-introduces it.
+- **Not demonstrated with a real crowd at scale.** Anonymity depends on a real,
+  busy epoch; no live deployment has shown a large crowd of independent users
+  depositing and acting together. The **metric** is now *analyzed* at scale over
+  **synthetic** populations ([`scale-analysis.md`](./scale-analysis.md)) — real-k
+  grows with honest scale, resists concentrated-Sybil inflation, and its
+  split-identity blind spot is the one the `entry_fee` prices — but synthetic
+  participants are **not** a real crowd. Whether real independent users will join
+  and act in the same epoch remains an **operational open question**.
 - **Global program upgrade authority** is out of scope here; a production
   deployment should use a governance-controlled or frozen upgrade authority.
 

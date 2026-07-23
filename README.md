@@ -30,6 +30,7 @@ that indirection is the core unlinkability primitive.
 | [`ARCHITECTURE.md`](./ARCHITECTURE.md) | System design, component walk-through, and the full threat model |
 | [`docs/security.md`](./docs/security.md) | Trusted setup, limitations, self-review findings, disclosure |
 | [`docs/anonymity.md`](./docs/anonymity.md) | Min-entropy effective-k metric, adversary models, the Sybil gap |
+| [`docs/scale-analysis.md`](./docs/scale-analysis.md) | Synthetic scale sweep: effective-k/real-k vs. size & Sybil pressure |
 | [`docs/compliance.md`](./docs/compliance.md) | Association sets, ZK inclusion, viewing keys, screening |
 | [`docs/circuit.md`](./docs/circuit.md) | Membership statement, Poseidon invariant, Phase-2 ceremony |
 | [`docs/deployment.md`](./docs/deployment.md) | Live devnet id, `--arch v3` build, RPC flow, local iteration |
@@ -86,7 +87,9 @@ Stated as facts about this design, not comparisons:
   anonymity metric is reported over the attested set.
 - **Grounded anonymity metric** — min-entropy effective-k over the association
   set (not a naive count), derived from the primary literature and honest about
-  the Sybil gap (see [`docs/anonymity.md`](./docs/anonymity.md)).
+  the Sybil gap (see [`docs/anonymity.md`](./docs/anonymity.md)), and *analyzed at
+  scale* over synthetic populations ([`docs/scale-analysis.md`](./docs/scale-analysis.md))
+  — the metric, not a real crowd.
 - **Sybil: priced and measured, not solved** — an optional on-chain `entry_fee`
   makes each fake identity cost real lamports (`s` Sybils → `s × entry_fee`), and
   `cli sim` headlines **real-k** (nominal minus same-funder clustering) instead of

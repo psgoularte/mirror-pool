@@ -79,6 +79,15 @@ misses are *both* made costly. Neither prices nor measurement solves Sybil
 resistance; together they narrow it honestly. See
 [`security.md`](./security.md) for the residual.
 
+## Behavior at scale (synthetic)
+
+[`scale-analysis.md`](./scale-analysis.md) sweeps this same metric across pool
+sizes (k up to 1000) and Sybil fractions, and overlays the entry-fee cost — a
+reproducible, seeded analysis. It shows real-k growing with honest scale and
+resisting concentrated-Sybil inflation. **The populations are synthetic**: it
+measures how the metric behaves, not that a real crowd of that size will form —
+which stays an operational open question.
+
 ## Why synchronized epochs (Anonymity Trilemma)
 
 Epoch windows are not an arbitrary latency knob. The **Anonymity Trilemma** (Das,

@@ -11,6 +11,7 @@
 //! * `associate` — ZK proof that a deposit is in an association set (compliance).
 //! * `disclose`  — seal a member's secret to an auditor (selective disclosure).
 //! * `sim`       — report min-entropy effective-k over the association set.
+//! * `scale`     — synthetic scale sweep of effective-k / real-k vs. size & Sybils.
 //!
 //! The offline commands (`setup`, `keygen`, `prove`, `disclose`, `sim`) need no
 //! network. `init-pool`, `deposit`, `crank`, and `execute` take an RPC endpoint.
@@ -177,6 +178,26 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         entry_fee: u64,
     },
+    /// **Synthetic** scale analysis: sweep the existing effective-k / real-k
+    /// metric across growing pool sizes and Sybil pressure, and price the
+    /// entry-fee mitigation against the curve. Prints tables (and optional CSV).
+    /// Synthetic populations only — this measures how the METRIC behaves at
+    /// scale, NOT that real users will join and act together.
+    Scale {
+        /// RNG seed (recorded for reproducibility; results are seed-invariant
+        /// under the documented model).
+        #[arg(long, default_value_t = 0x5CA1E)]
+        seed: u64,
+        /// Fixed honest size for the Sybil-pressure sweep.
+        #[arg(long, default_value_t = 100)]
+        honest: u64,
+        /// Entry fee (lamports) for the cost overlay.
+        #[arg(long, default_value_t = 1_000_000_000)]
+        entry_fee: u64,
+        /// Optional directory to also write `scale_size.csv` + `scale_sybil.csv`.
+        #[arg(long)]
+        csv: Option<PathBuf>,
+    },
     /// Create a pool on-chain (the signer becomes the pool authority). Uses the
     /// deterministic dev verifying key.
     InitPool {
@@ -299,6 +320,12 @@ fn main() -> Result<()> {
             epochs,
             entry_fee,
         } => cmd_sim(members, sybils, actors, epochs, entry_fee),
+        Command::Scale {
+            seed,
+            honest,
+            entry_fee,
+            csv,
+        } => cmd_scale(seed, honest, entry_fee, csv.as_deref()),
         Command::InitPool {
             rpc_url,
             keypair,
@@ -802,6 +829,156 @@ fn cmd_sim(members: u64, sybils: u64, actors: u64, epochs: u64, entry_fee: u64) 
              {} × entry_fee lamports; run with --entry-fee to price it.",
             members + sybils,
             sybils,
+        );
+    }
+    Ok(())
+}
+
+/// Synthetic scale analysis. Reuses the validated `anonymity` metric only — it
+/// invents no new number. Populations are synthetic; this measures how the
+/// metric behaves as the pool grows, NOT that real users will join and act.
+fn cmd_scale(seed: u64, honest_fixed: u64, entry_fee: u64, csv_dir: Option<&Path>) -> Result<()> {
+    use mirror_pool_anonymity::{measure, sybil_inflation_cost, Bucket, Note};
+    use rand::{rngs::StdRng, Rng, SeedableRng};
+
+    // The seed derives a single uniform salt added to every funder id. Shifting
+    // all ids equally preserves clustering, so the metric is invariant to it —
+    // we consume + record the seed for reproducibility (and for future
+    // stochastic funder models), and say so plainly rather than implying the
+    // seed injects variance it does not.
+    let salt: u64 = StdRng::seed_from_u64(seed).gen();
+    // A single observable bucket: mirror-pool deposits are not denomination-bound,
+    // so the candidate set for an action is the whole (scoped) note set; the
+    // analysis is about set size vs. Sybils, not per-bucket thinning.
+    let buckets = [Bucket {
+        denomination: 0,
+        action_type: 0,
+    }];
+    // Honest members are modeled as **independently funded** (a distinct funder
+    // each). Sybils are modeled two ways: **concentrated** (one funder controls
+    // all of them — the largest cluster the real-k heuristic discounts) and
+    // **split** (one funder per Sybil — which evades the heuristic, showing why
+    // the entry fee, priced per identity, is the needed complement).
+    let honest_notes = |k: u64| -> Vec<Note> {
+        (0..k)
+            .map(|i| Note {
+                funder: salt.wrapping_add(i + 1),
+                associated: true,
+            })
+            .collect()
+    };
+    let concentrated_sybils = |s: u64| -> Vec<Note> {
+        (0..s)
+            .map(|_| Note {
+                funder: salt, // one funder for all
+                associated: false,
+            })
+            .collect()
+    };
+    let split_sybils = |s: u64| -> Vec<Note> {
+        (0..s)
+            .map(|j| Note {
+                funder: salt.wrapping_sub(j + 1), // a distinct funder each
+                associated: false,
+            })
+            .collect()
+    };
+
+    println!("=== mirror-pool SYNTHETIC scale analysis ===");
+    println!(
+        "SYNTHETIC populations only. This shows how the effective-k / real-k METRIC behaves as the\n\
+         pool grows — it does NOT show real independent users, and cannot demonstrate that real\n\
+         people will join and act in the same epoch. That remains an operational open question.\n\
+         Nothing here is 'proven private at scale'; it is the metric, measured over synthetic data.\n\
+         seed = {seed} (results are seed-invariant under the documented model); entry_fee = {entry_fee} lamports.\n\
+         Metric: min-entropy effective-k = 1/max_i p_i; real-k = nominal − largest same-funder cluster."
+    );
+
+    // --- Sweep 1: pool size (honest only) ---
+    println!("\n[1] Pool size (honest only, no Sybils) — privacy grows with honest scale:");
+    println!(
+        "  {:>8} | {:>10} | {:>14} | {:>8}",
+        "honest-k", "nominal-k", "effective-k", "real-k"
+    );
+    println!("  {:->8}-+-{:->10}-+-{:->14}-+-{:->8}", "", "", "", "");
+    let mut size_rows: Vec<(u64, usize, f64, f64)> = Vec::new();
+    for k in [10u64, 50, 100, 500, 1000] {
+        let r = measure(&honest_notes(k), &buckets);
+        let nominal = r.over_all.nominal_k;
+        let eff = r.over_all.worst_uniform_effective_k;
+        let real = r.over_all.real_k();
+        println!("  {k:>8} | {nominal:>10} | {eff:>14.1} | {real:>8.1}");
+        size_rows.push((k, nominal, eff, real));
+    }
+
+    // --- Sweep 2: Sybil pressure at fixed honest size ---
+    let h = honest_fixed;
+    println!(
+        "\n[2] Sybil pressure at honest-k = {h} — real-k stays pinned to the honest floor while\n\
+         nominal inflates; the gap is the Sybil exposure. 'split' shows an adversary spreading\n\
+         Sybils across identities to evade the clustering heuristic — which the entry fee prices:"
+    );
+    println!(
+        "  {:>7} | {:>9} | {:>10} | {:>13} | {:>11} | {:>8} | {:>16}",
+        "sybil%", "sybils", "nominal-k", "real-k(conc)", "real-k(split)", "gap", "inflate cost"
+    );
+    println!(
+        "  {:->7}-+-{:->9}-+-{:->10}-+-{:->13}-+-{:->11}-+-{:->8}-+-{:->16}",
+        "", "", "", "", "", "", ""
+    );
+    let mut sybil_rows: Vec<(f64, u64, usize, f64, f64, f64, u128)> = Vec::new();
+    for pct in [0u64, 25, 50, 75] {
+        let f = pct as f64 / 100.0;
+        // sybils so that s / (h + s) = f  =>  s = f*h/(1-f).
+        let s = if pct == 0 {
+            0
+        } else {
+            ((f * h as f64) / (1.0 - f)).round() as u64
+        };
+        let mut conc = honest_notes(h);
+        conc.extend(concentrated_sybils(s));
+        let rc = measure(&conc, &buckets);
+        let mut split = honest_notes(h);
+        split.extend(split_sybils(s));
+        let rs = measure(&split, &buckets);
+
+        let nominal = rc.over_all.nominal_k;
+        let real_conc = rc.over_all.real_k();
+        let real_split = rs.over_all.real_k();
+        let gap = nominal as f64 - real_conc;
+        let cost = sybil_inflation_cost(nominal as u64, h, entry_fee);
+        println!(
+            "  {:>6.0}% | {s:>9} | {nominal:>10} | {real_conc:>13.1} | {real_split:>11.1} | {gap:>8.1} | {:>13} SOL",
+            f * 100.0,
+            format!("{:.1}", cost as f64 / 1e9)
+        );
+        sybil_rows.push((f, s, nominal, real_conc, real_split, gap, cost));
+    }
+
+    println!(
+        "\nReading: real-k(conc) tracks the honest floor (~{h}) no matter how many Sybils are added —\n\
+         the metric is not fooled by single-funder inflation. real-k(split) shows the heuristic's\n\
+         limit (a split adversary evades it), which is exactly why the per-identity entry fee is the\n\
+         complementary mitigation: reaching a given nominal-k costs 'inflate cost' regardless of split."
+    );
+
+    if let Some(dir) = csv_dir {
+        std::fs::create_dir_all(dir).context("create csv dir")?;
+        let mut s1 = String::from("honest_k,nominal_k,effective_k,real_k\n");
+        for (k, n, e, r) in &size_rows {
+            s1.push_str(&format!("{k},{n},{e:.4},{r:.4}\n"));
+        }
+        std::fs::write(dir.join("scale_size.csv"), s1)?;
+        let mut s2 = String::from(
+            "sybil_fraction,sybils,nominal_k,real_k_concentrated,real_k_split,sybil_gap,inflate_cost_lamports\n",
+        );
+        for (f, s, n, rc, rs, g, c) in &sybil_rows {
+            s2.push_str(&format!("{f:.2},{s},{n},{rc:.4},{rs:.4},{g:.4},{c}\n"));
+        }
+        std::fs::write(dir.join("scale_sybil.csv"), s2)?;
+        println!(
+            "\nwrote scale_size.csv + scale_sybil.csv to {}",
+            dir.display()
         );
     }
     Ok(())
