@@ -121,10 +121,10 @@ pub fn setup<R: RngCore + CryptoRng>(
         .map_err(|e| CircuitError::Setup(e.to_string()))
 }
 
-// The former fixed-seed `dev_setup` (a single-party, public-seed setup) has been
-// removed: it was forgeable by anyone. Keys now come from the multi-contributor
-// Phase-2 ceremony in `crate::ceremony` (see `docs/security.md`). Tests use `setup`
-// with a seeded RNG directly for a fast, throwaway key.
+// Keys come from the multi-contributor Phase-2 ceremony in `crate::ceremony`
+// (distributable + independently verifiable via `cli verify-setup`; see
+// `docs/security.md`). Tests use `setup` with a seeded RNG directly for a fast,
+// throwaway key.
 
 /// Generate a proof for a fully-assigned circuit.
 pub fn prove<R: RngCore + CryptoRng>(

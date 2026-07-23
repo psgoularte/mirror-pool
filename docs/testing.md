@@ -63,7 +63,7 @@ attacks the public trace:
 
 ## Level 4 — Solana deployability ✅ (live on devnet)
 
-- **CU under budget:** `cu-bench` (bench build) asserts `VerifyMembership < 200k` (measured **98,627**); `flow` asserts `execute_action < 200k` (measured ~108–116k). Far under the 1.4M cap.
+- **CU under budget:** `cu-bench` (bench build) asserts `VerifyMembership < 200k` (measured **98,634** by the current `demo.sh`); `flow` asserts `execute_action < 200k` (measured ~108–116k; 108,367 observed on-chain, see [`PROOF.md`](./PROOF.md)). Far under the 1.4M cap.
 - **Explicit CU request:** the relayer prepends `ComputeBudgetInstruction::set_compute_unit_limit`; `flow`/`cu-bench` too.
 - **Tx size:** proof (256) + 4 public inputs (128) + accounts fit; all txs land.
 - **Deploys and runs on a real validator:** the `--arch v3` artifact was deployed to a local `solana-test-validator` (real Agave 4.1.1) and the **full flow ran against the deployed program id over RPC** via the CLI — `init-pool`, `deposit`×2, `crank open`, and a relayer-paid `execute` (on-chain proof verification + PDA-signed CPI), each a confirmed transaction.

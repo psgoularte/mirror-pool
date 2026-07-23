@@ -91,9 +91,12 @@ nullifier" — without revealing which leaf.
 The Poseidon hashing inside the circuit is the R1CS gadget in
 `circuit::poseidon_gadget`, which mirrors `common::poseidon` and is tested equal
 to it. `prover.rs` owns setup/prove/verify and the `PublicInputs` byte encoding
-shared with the chain. The trusted setup here is a local dev/test setup; a
-production deployment must source the proving/verifying keys from a multi-party
-ceremony (the toxic waste must be discarded) — called out in the code.
+shared with the chain. The proving/verifying keys come from a **multi-contributor
+Phase-2 ceremony** (`circuit::ceremony`) that is distributable across independent
+operators and independently verifiable (`cli verify-setup`); the committed key
+currently has **1 independent contributor** (single operator), so it is
+testnet-grade — see [`docs/security.md`](./docs/security.md) and
+[`docs/circuit.md`](./docs/circuit.md).
 
 Negative tests (mandatory per SPEC §7) cover wrong secret, tampered path,
 action-binding mismatch, and wrong epoch, each with real proofs.
@@ -454,8 +457,8 @@ epoch). Double-acting in one epoch is prevented by the nullifier set.
 | **Single-action windows** | If only one action lands in an epoch, an observer correlating deposits/epochs can narrow the actor. | Enforced on-chain: `execute_action` rejects unless `members − actions_this_epoch ≥ k_min` (`AnonymitySetTooSmall`); epoch batcher clusters submissions; `sim` reports the realized count. | The bound is program-visible membership, not honest anonymity (see Sybil row). |
 | **Timing correlation** | Deposit→action latency, or repeated same-time behavior across epochs, can re-link a member. | Epoch batching decouples action time from any single member; per-epoch nullifiers prevent cross-epoch linkage of the *same* nullifier. | Behavioral timing patterns across epochs are **not** fully hidden. Documented as residual. |
 | **Amount / dust correlation** | For value-carrying actions (the transfer), a unique amount links input to output. | The `TransferAction` accepts only **fixed denominations** (0.1/1/10 SOL), and the amount is proof-bound, so it is not a distinguishing feature (`InvalidDenomination` otherwise). | A new value-carrying integration must adopt denominations too; arbitrary-amount actions would leak. |
-| **Anonymity-set size / Sybil** | A tiny pool means few candidates; worse, permissionless deposits let an attacker Sybil-inflate the pool to satisfy `k_min` while the honest set is ~1. | Depth-20 tree (~1M capacity); on-chain `k_min`; the deposit-screening hook can gate entry to vetted/attested/staked depositors. | `k_min` bounds program-visible membership, **not** honest anonymity against a Sybil adversary. Enable screening or staked deposits for real deployments. Inherent to commitment-set designs. |
-| **Trusted setup** | A retained setup secret ("toxic waste") lets an attacker forge membership proofs. | Documented requirement: production keys from a multi-party ceremony; the dev `setup` is for local use only. | If the ceremony is compromised, soundness (not privacy) breaks. Out of protocol scope. |
+| **Anonymity-set size / Sybil** | A tiny pool means few candidates; worse, permissionless deposits let an attacker Sybil-inflate the pool to satisfy `k_min` while the honest set is ~1. | Depth-20 tree (~1M capacity); on-chain `k_min`; the deposit-screening hook can gate entry; the optional `entry_fee` **prices** each Sybil identity; **real-k** (`sim`) **measures** honest anonymity by discounting same-funder clusters. | `k_min` bounds program-visible membership, **not** honest anonymity against a Sybil adversary. The fee prices it and real-k estimates it — neither *solves* it (a split-identity adversary evades the heuristic; a funded one still pays). Enable screening or staked deposits for real deployments. Inherent to commitment-set designs. |
+| **Trusted setup** | A retained setup secret ("toxic waste") lets an attacker forge membership proofs. | A distributable, independently-verifiable multi-contributor Phase-2 ceremony (`circuit::ceremony`; check it with `cli verify-setup`). | The committed key has **1 independent contributor** (single operator) → testnet-grade; secure only if that one operator was honest. Production needs more independent contributors + a public Phase-1. Soundness (not privacy) breaks if it was not. |
 | **Screening authority** | If enabled, the screening authority sees who deposits. | Off by default; when on, it is scoped to *entry* only and never sees actions. | Enabling screening trades some deposit-time privacy for compliance — an explicit, opt-in choice. |
 
 ### What mirror-pool does NOT defend against
@@ -466,7 +469,9 @@ epoch). Double-acting in one epoch is prevented by the nullifier set.
   construction. Trust or decentralize the relayer.
 - **Global passive adversaries doing statistical disclosure** over long horizons
   with thin windows and unique amounts: mitigated, not eliminated.
-- **Compromised trusted setup**: breaks soundness; requires a proper ceremony.
+- **Compromised trusted setup**: breaks soundness. The ceremony is implemented
+  and verifiable, but the shipped key is single-operator (1 independent
+  contributor) — production needs more independent contributors + a public Phase-1.
 
 ### Assurance status (honesty gate)
 
@@ -475,11 +480,15 @@ epoch). Double-acting in one epoch is prevented by the nullifier set.
   and covered by adversarial negative tests (wrong secret, tampered path,
   stale/unknown root, reused nullifier, action-binding mismatch, wrong epoch —
   each with a dedicated failing case), but not machine-checked.
-- **Dev trusted setup only.** The keys `cli setup` produces are for local use;
-  production requires a multi-party ceremony that discards the toxic waste.
-- **Minimum anonymity set is not enforced on-chain** (it cannot be — the count of
-  future actions in a window is unknown at execution time). It is surfaced by
-  `sim`/the relayer and must be enforced operationally (keep windows busy).
+- **Single-operator trusted setup.** The ceremony is a distributable,
+  independently-verifiable multi-contributor Phase-2 (`cli verify-setup`), but the
+  committed key has **1 independent contributor** (single operator) → testnet-grade;
+  production needs more independent contributors + a public Phase-1.
+- **Minimum anonymity set: a lower bound is enforced on-chain.** `execute_action`
+  rejects with `AnonymitySetTooSmall` unless `members − actions_this_epoch ≥
+  k_min`. This bounds **program-visible** membership, not honest anonymity (a
+  Sybil adversary can inflate it — priced by `entry_fee`, measured by real-k); the
+  realized crowd is additionally surfaced by `sim`/the relayer.
 
 The honest one-line summary: *mirror-pool hides which member acted, as strongly
 as the pool is large and the epoch window is busy, provided a trusted relayer

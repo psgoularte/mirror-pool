@@ -123,7 +123,7 @@ Measured on devnet (not litesvm) for this run:
 | `k_min` early reject | 2,236 | simulation logs |
 
 These agree with the litesvm-measured figure in [`testing.md`](./testing.md)
-(VerifyMembership ≈ 98,627 CU; `execute_action` ≈ 108–116k) — the on-chain
+(VerifyMembership ≈ 98.6k CU; `execute_action` ≈ 108–116k) — the on-chain
 numbers confirm the benchmark, they do not replace it.
 
 ## Reproduce
